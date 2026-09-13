@@ -290,38 +290,38 @@ export default function Dashboard() {
 
   // ── DEFAULT: Most layers OFF — fast initial load ──
   const [activeLayers, setActiveLayers] = useState({
-    flights: false,
-    private: false,
-    jets: false,
-    military: false,
+    flights: true,
+    private: true,
+    jets: true,
+    military: true,
     maritime: true,
-    satellites: false,
+    satellites: true,
     sat_comms: false,
-    sat_military: false,
-    sat_navigation: false,
-    sat_earth: false,
+    sat_military: true,
+    sat_navigation: true,
+    sat_earth: true,
     sat_science: false,
-    balloons: false,
+    balloons: true,
     cctv: true,
     /* The live preview tiles over the camera dots — see CctvPreviews. */
     cctv_previews: true,
     live_news: true,
     earthquakes: true,
-    fires: false,
-    weather: false,
+    fires: true,
+    weather: true,
     radiation: false,
-    infrastructure: false,
+    infrastructure: true,
     global_incidents: true,
-    war_alerts: false,
+    war_alerts: true,
     day_night: true,
     cables: true,
     sdk_sea: true,
     sdk_air: true,
     sdk_naval: true,
-    terrain_3d: false,
+    terrain_3d: true,
     terrain_elevation: false,
     malware: false,
-    cyber_attacks: false,
+    cyber_attacks: true,
     gdelt_events: false,
     cf_outages: false,
     cf_attacks: false,
@@ -356,14 +356,31 @@ export default function Dashboard() {
     const p = new URLSearchParams(window.location.search);
     const layers = p.get('layers');
     if (layers) {
-      const active = layers.split(',');
-      setActiveLayers(prev => {
-        const next = { ...prev };
-        Object.keys(next).forEach(k => { (next as any)[k] = active.includes(k); });
-        return next;
-      });
-    }
+  const active = layers.split(',');
 
+  setActiveLayers(prev => {
+    const next = { ...prev };
+
+    Object.keys(next).forEach(k => {
+      (next as any)[k] = active.includes(k);
+    });
+
+    // Keep aviation layers enabled
+    next.flights = true;
+    next.private = true;
+    next.jets = true;
+    next.military = true;
+    next.satellites: true;
+    next.sat_navigation: true;
+    next.sat_earth: true;
+   next.cctv_previews: true;
+    next.live_news: true; 
+    next.earthquakes: true;
+    next.fires: true;
+    next.weather: true;
+    return next;
+  });
+}
     // Probe which credential-gated feeds this deployment has configured, so the
     // layer panel can hide toggles that could never return data.
     fetch('/api/cloudflare-radar?probe=1')

@@ -1608,7 +1608,7 @@ function OsirisMap({ data, activeLayers, onEntityClick, onMouseCoords, onRightCl
         properties: { callsign: f.callsign, heading: f.heading || 0, alt: f.alt, model: f.model, speed_knots: f.speed_knots, registration: f.registration, icao24: f.icao24 },
       }));
     };
-    setGeo('flights', activeLayers.flights ? toFeatures(data.commercial_flights, 10) : []);
+    setGeo('flights', activeLayers.flights ? toFeatures(data.commercial_flights, 1) : []);
     setGeo('private-fl', activeLayers.private ? toFeatures(data.private_flights, 2) : []);
     setGeo('jets', activeLayers.jets ? toFeatures(data.private_jets, 2) : []);
     setGeo('military', activeLayers.military ? toFeatures(data.military_flights) : []);

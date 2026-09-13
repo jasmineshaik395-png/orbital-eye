@@ -8,21 +8,15 @@ type Flight = {
   registration?: string;
   type?: string;
   origin_country?: string;
-
   lat: number;
   lon: number;
-
   alt_baro: number;
   alt_geom?: number;
-
   gs: number;
   track: number;
-
   squawk?: string;
   category_os?: number;
-
   on_ground?: boolean;
-
   source?: string;
   demo?: boolean;
 };
@@ -42,22 +36,19 @@ function sleep(ms: number) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-/* ---------------------------------------------------------
+/* =========================================================
    OPEN SKY
---------------------------------------------------------- */
+========================================================= */
 
 async function fetchOpenSky(): Promise<Flight[]> {
   const now = Date.now();
 
-  // Anonymous OpenSky should not be polled continuously.
   if (now - lastOpenSkyRequest < 10_000) {
     return cachedFlights?.data ?? [];
   }
 
   lastOpenSkyRequest = now;
 
-  // India + surrounding South Asia.
-  // Smaller bounding boxes cost fewer OpenSky credits.
   const url =
     "https://opensky-network.org/api/states/all" +
     "?lamin=5" +
@@ -81,6 +72,7 @@ async function fetchOpenSky(): Promise<Flight[]> {
       console.log(
         `OpenSky returned ${response.status}: ${response.statusText}`
       );
+
       return [];
     }
 
@@ -96,7 +88,7 @@ async function fetchOpenSky(): Promise<Flight[]> {
     }
 
     const flights: Flight[] = states
-      .filter((s) => {
+      .filter((s: OpenSkyState) => {
         const lat = Number(s?.[6]);
         const lon = Number(s?.[5]);
 
@@ -109,7 +101,7 @@ async function fetchOpenSky(): Promise<Flight[]> {
           lon <= 180
         );
       })
-      .map((s) => {
+      .map((s: OpenSkyState): Flight => {
         const altitudeMeters = Number(s?.[7] ?? 0);
         const speedMs = Number(s?.[9] ?? 0);
 
@@ -123,30 +115,34 @@ async function fetchOpenSky(): Promise<Flight[]> {
           lon: Number(s?.[5]),
           lat: Number(s?.[6]),
 
-          // meters -> feet
           alt_baro: altitudeMeters * 3.28084,
 
-          // m/s -> knots
           gs: speedMs * 1.94384,
 
           track: Number(s?.[10] ?? 0),
 
-          squawk: s?.[14] ? String(s[14]) : undefined,
+          squawk: s?.[14]
+            ? String(s[14])
+            : undefined,
 
           category_os:
-            s?.[17] !== null && s?.[17] !== undefined
+            s?.[17] !== null &&
+            s?.[17] !== undefined
               ? Number(s[17])
               : undefined,
 
           on_ground: Boolean(s?.[8]),
 
           source: "opensky",
+
           demo: false,
         };
       })
-      .filter((f) => !f.on_ground);
+      .filter((f: Flight) => !f.on_ground);
 
-    console.log(`OpenSky aircraft received: ${flights.length}`);
+    console.log(
+      `OpenSky aircraft received: ${flights.length}`
+    );
 
     return flights;
   } catch (error) {
@@ -155,9 +151,9 @@ async function fetchOpenSky(): Promise<Flight[]> {
   }
 }
 
-/* ---------------------------------------------------------
+/* =========================================================
    ADSB.FI FALLBACK
---------------------------------------------------------- */
+========================================================= */
 
 async function fetchAdsbFi(): Promise<Flight[]> {
   try {
@@ -175,7 +171,10 @@ async function fetchAdsbFi(): Promise<Flight[]> {
     });
 
     if (!response.ok) {
-      console.log(`adsb.fi returned ${response.status}`);
+      console.log(
+        `adsb.fi returned ${response.status}`
+      );
+
       return [];
     }
 
@@ -196,12 +195,14 @@ async function fetchAdsbFi(): Promise<Flight[]> {
         );
       })
       .map((a: any): Flight => ({
-        hex: String(a?.hex ?? "").toUpperCase(),
+        hex: String(
+          a?.hex ?? ""
+        ).toUpperCase(),
 
         flight: String(
           a?.flight ??
-          a?.callsign ??
-          "UNKNOWN"
+            a?.callsign ??
+            "UNKNOWN"
         ).trim(),
 
         registration: a?.r
@@ -217,47 +218,61 @@ async function fetchAdsbFi(): Promise<Flight[]> {
         lat: Number(a.lat),
         lon: Number(a.lon),
 
-        alt_baro:
-          Number(a?.alt_baro ?? a?.altitude ?? 0),
+        alt_baro: Number(
+          a?.alt_baro ??
+            a?.altitude ??
+            0
+        ),
 
-        gs:
-          Number(a?.gs ?? a?.speed ?? 0),
+        gs: Number(
+          a?.gs ??
+            a?.speed ??
+            0
+        ),
 
-        track:
-          Number(a?.track ?? a?.heading ?? 0),
+        track: Number(
+          a?.track ??
+            a?.heading ??
+            0
+        ),
 
         squawk: a?.squawk
           ? String(a.squawk)
           : undefined,
 
-        on_ground: Boolean(a?.ground),
+        on_ground: Boolean(
+          a?.ground
+        ),
 
         source: "adsb.fi",
+
         demo: false,
       }))
-      .filter((f) => !f.on_ground);
+      .filter(
+        (f: Flight) => !f.on_ground
+      );
   } catch (error) {
-    console.error("adsb.fi error:", error);
+    console.error(
+      "adsb.fi error:",
+      error
+    );
+
     return [];
   }
 }
 
-/* ---------------------------------------------------------
+/* =========================================================
    DEMO FALLBACK
-   ---------------------------------------------------------
 
-   IMPORTANT:
-   These are demonstration positions, NOT live aircraft.
-   They are used only when live providers return zero data,
-   so the Expo interface does not remain empty.
---------------------------------------------------------- */
+   Used ONLY when live providers return zero aircraft.
+========================================================= */
 
 function getDemoFlights(): Flight[] {
   return [
     {
       hex: "DEMO001",
       flight: "IGO-DEMO1",
-      registration: "VT-DEMO",
+      registration: "VT-DEMO1",
       type: "A320",
       origin_country: "India",
       lat: 13.0827,
@@ -400,9 +415,9 @@ function getDemoFlights(): Flight[] {
   ];
 }
 
-/* ---------------------------------------------------------
+/* =========================================================
    CLASSIFICATION
---------------------------------------------------------- */
+========================================================= */
 
 function classifyFlights(flights: Flight[]) {
   const commercial: Flight[] = [];
@@ -412,25 +427,20 @@ function classifyFlights(flights: Flight[]) {
   const gpsJamming: Flight[] = [];
 
   for (const flight of flights) {
-    const callsign = (
-      flight.flight ||
-      ""
-    ).toUpperCase();
+    const callsign =
+      (flight.flight || "").toUpperCase();
 
-    const country = (
-      flight.origin_country ||
-      ""
-    ).toUpperCase();
+    const country =
+      (flight.origin_country || "")
+        .toUpperCase();
 
-    const type = (
-      flight.type ||
-      ""
-    ).toUpperCase();
+    const type =
+      (flight.type || "").toUpperCase();
 
-    // Military indicators
+    /* Military */
+
     const militaryMatch =
       callsign.includes("MIL") ||
-      callsign.includes("AF") ||
       callsign.includes("RCH") ||
       callsign.includes("FORTE") ||
       callsign.includes("NAVY") ||
@@ -442,7 +452,8 @@ function classifyFlights(flights: Flight[]) {
       continue;
     }
 
-    // Private jet indicators
+    /* Private jets */
+
     const privateJetMatch =
       type.includes("GULFSTREAM") ||
       type.includes("FALCON") ||
@@ -455,7 +466,8 @@ function classifyFlights(flights: Flight[]) {
       continue;
     }
 
-    // Commercial airline indicators
+    /* Commercial */
+
     const commercialMatch =
       callsign.startsWith("IGO") ||
       callsign.startsWith("AIC") ||
@@ -476,7 +488,8 @@ function classifyFlights(flights: Flight[]) {
       continue;
     }
 
-    // General aircraft → commercial for map visibility
+    // Put other aircraft in commercial
+    // so they remain visible on the map.
     commercial.push(flight);
   }
 
@@ -489,20 +502,26 @@ function classifyFlights(flights: Flight[]) {
   };
 }
 
-/* ---------------------------------------------------------
+/* =========================================================
    API
---------------------------------------------------------- */
+========================================================= */
 
 export async function GET() {
   try {
-    // Use short server-side cache
+    /* -----------------------------------------------------
+       CACHE
+    ----------------------------------------------------- */
+
     if (
       cachedFlights &&
-      Date.now() - cachedFlights.timestamp < CACHE_TTL
+      Date.now() -
+        cachedFlights.timestamp <
+        CACHE_TTL
     ) {
-      const classified = classifyFlights(
-        cachedFlights.data
-      );
+      const classified =
+        classifyFlights(
+          cachedFlights.data
+        );
 
       return NextResponse.json(
         {
@@ -521,32 +540,39 @@ export async function GET() {
           gps_jamming:
             classified.gpsJamming,
 
-          total: cachedFlights.data.length,
+          total:
+            cachedFlights.data.length,
 
           source:
-            cachedFlights.data[0]?.source ??
-            "cache",
+            cachedFlights.data[0]
+              ?.source ?? "cache",
 
           providers: {
             adsbfi_mil: 0,
+
             adsbfi_regional: 0,
 
             opensky:
               cachedFlights.data.filter(
-                (f) => f.source === "opensky"
+                (f: Flight) =>
+                  f.source ===
+                  "opensky"
               ).length,
 
             opensky_auth:
               Boolean(
-                process.env.OPENSKY_CLIENT_ID &&
-                process.env.OPENSKY_CLIENT_SECRET
+                process.env
+                  .OPENSKY_CLIENT_ID &&
+                process.env
+                  .OPENSKY_CLIENT_SECRET
               ),
 
-            opensky_age_s: Math.round(
-              (Date.now() -
-                cachedFlights.timestamp) /
-                1000
-            ),
+            opensky_age_s:
+              Math.round(
+                (Date.now() -
+                  cachedFlights.timestamp) /
+                  1000
+              ),
           },
 
           timestamp:
@@ -561,17 +587,18 @@ export async function GET() {
       );
     }
 
-    /* ---------------------------------------------
-       1. Try OpenSky
-    --------------------------------------------- */
+    /* -----------------------------------------------------
+       1. OPEN SKY
+    ----------------------------------------------------- */
 
-    let flights = await fetchOpenSky();
+    let flights =
+      await fetchOpenSky();
 
     let source = "opensky";
 
-    /* ---------------------------------------------
-       2. Try ADSB.FI if OpenSky empty
-    --------------------------------------------- */
+    /* -----------------------------------------------------
+       2. ADSB.FI
+    ----------------------------------------------------- */
 
     if (flights.length === 0) {
       await sleep(500);
@@ -585,22 +612,25 @@ export async function GET() {
       }
     }
 
-    /* ---------------------------------------------
+    /* -----------------------------------------------------
        3. DEMO FALLBACK
-    --------------------------------------------- */
+    ----------------------------------------------------- */
 
     if (flights.length === 0) {
       console.log(
-        "No live aircraft available. Using demo flight data."
+        "No live aircraft available. Using demo data."
       );
 
-      flights = getDemoFlights();
-      source = "demo-fallback";
+      flights =
+        getDemoFlights();
+
+      source =
+        "demo-fallback";
     }
 
-    /* ---------------------------------------------
-       Cache
-    --------------------------------------------- */
+    /* -----------------------------------------------------
+       CACHE
+    ----------------------------------------------------- */
 
     cachedFlights = {
       data: flights,
@@ -612,18 +642,27 @@ export async function GET() {
 
     const openskyCount =
       flights.filter(
-        (f) => f.source === "opensky"
+        (f: Flight) =>
+          f.source ===
+          "opensky"
       ).length;
 
     const adsbCount =
       flights.filter(
-        (f) => f.source === "adsb.fi"
+        (f: Flight) =>
+          f.source ===
+          "adsb.fi"
       ).length;
 
     const demoCount =
       flights.filter(
-        (f) => f.demo === true
+        (f: Flight) =>
+          f.demo === true
       ).length;
+
+    /* -----------------------------------------------------
+       RESPONSE
+    ----------------------------------------------------- */
 
     return NextResponse.json(
       {
@@ -642,7 +681,8 @@ export async function GET() {
         gps_jamming:
           classified.gpsJamming,
 
-        total: flights.length,
+        total:
+          flights.length,
 
         source,
 
@@ -657,11 +697,14 @@ export async function GET() {
 
           opensky_auth:
             Boolean(
-              process.env.OPENSKY_CLIENT_ID &&
-              process.env.OPENSKY_CLIENT_SECRET
+              process.env
+                .OPENSKY_CLIENT_ID &&
+              process.env
+                .OPENSKY_CLIENT_SECRET
             ),
 
-          opensky_age_s: null,
+          opensky_age_s:
+            null,
 
           demo:
             demoCount,
@@ -683,13 +726,17 @@ export async function GET() {
       error
     );
 
-    // Even if everything fails, return demo data
-    // so the Expo interface doesn't become empty.
+    /* -----------------------------------------------------
+       FINAL FALLBACK
+    ----------------------------------------------------- */
+
     const demoFlights =
       getDemoFlights();
 
     const classified =
-      classifyFlights(demoFlights);
+      classifyFlights(
+        demoFlights
+      );
 
     return NextResponse.json(
       {
@@ -708,9 +755,11 @@ export async function GET() {
         gps_jamming:
           classified.gpsJamming,
 
-        total: demoFlights.length,
+        total:
+          demoFlights.length,
 
-        source: "demo-fallback",
+        source:
+          "demo-fallback",
 
         providers: {
           adsbfi_mil: 0,
@@ -718,7 +767,8 @@ export async function GET() {
           opensky: 0,
           opensky_auth: false,
           opensky_age_s: null,
-          demo: demoFlights.length,
+          demo:
+            demoFlights.length,
         },
 
         timestamp:

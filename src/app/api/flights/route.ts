@@ -1,783 +1,294 @@
 import { NextResponse } from "next/server";
 
-export const maxDuration = 60;
+export const dynamic = "force-dynamic";
+export const revalidate = 0;
 
 type Flight = {
-  hex: string;
-  flight: string;
-  registration?: string;
-  type?: string;
-  origin_country?: string;
+  icao24: string;
+  callsign: string;
   lat: number;
-  lon: number;
-  alt_baro: number;
-  alt_geom?: number;
-  gs: number;
-  track: number;
-  squawk?: string;
-  category_os?: number;
-  on_ground?: boolean;
+  lng: number;
+  alt: number;
+  speed_knots: number;
+  heading: number;
+  registration?: string;
+  model?: string;
+  category?: string;
   source?: string;
-  demo?: boolean;
 };
 
-type OpenSkyState = any[];
+const OPENSKY_TOKEN_URL =
+  "https://auth.opensky-network.org/auth/realms/opensky-network/protocol/openid-connect/token";
 
-const CACHE_TTL = 20_000;
+const OPENSKY_STATES_URL =
+  "https://opensky-network.org/api/states/all?extended=1";
 
-let cachedFlights: {
-  data: Flight[];
-  timestamp: number;
-} | null = null;
+// India + nearby airspace.
+// Remove this bbox if you want global coverage.
+const INDIA_BBOX =
+  "&lamin=6&lomin=67&lamax=37&lomax=98";
 
-let lastOpenSkyRequest = 0;
+async function getOpenSkyToken(): Promise<string | null> {
+  const clientId = process.env.OPENSKY_CLIENT_ID;
+  const clientSecret = process.env.OPENSKY_CLIENT_SECRET;
 
-function sleep(ms: number) {
-  return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
-/* =========================================================
-   OPEN SKY
-========================================================= */
-
-async function fetchOpenSky(): Promise<Flight[]> {
-  const now = Date.now();
-
-  if (now - lastOpenSkyRequest < 10_000) {
-    return cachedFlights?.data ?? [];
+  if (!clientId || !clientSecret) {
+    return null;
   }
 
-  lastOpenSkyRequest = now;
-
-  const url =
-    "https://opensky-network.org/api/states/all" +
-    "?lamin=5" +
-    "&lomin=65" +
-    "&lamax=37" +
-    "&lomax=100" +
-    "&extended=1";
-
   try {
-    const response = await fetch(url, {
-      method: "GET",
+    const response = await fetch(OPENSKY_TOKEN_URL, {
+      method: "POST",
       headers: {
-        Accept: "application/json",
-        "User-Agent": "Orbital-Eye/1.0",
+        "Content-Type": "application/x-www-form-urlencoded",
       },
+      body: new URLSearchParams({
+        grant_type: "client_credentials",
+        client_id: clientId,
+        client_secret: clientSecret,
+      }),
       cache: "no-store",
-      signal: AbortSignal.timeout(15_000),
     });
 
     if (!response.ok) {
-      console.log(
-        `OpenSky returned ${response.status}: ${response.statusText}`
-      );
-
-      return [];
+      console.error("OpenSky token error:", response.status);
+      return null;
     }
 
     const data = await response.json();
-
-    const states: OpenSkyState[] = Array.isArray(data?.states)
-      ? data.states
-      : [];
-
-    if (states.length === 0) {
-      console.log("OpenSky returned 0 aircraft");
-      return [];
-    }
-
-    const flights: Flight[] = states
-      .filter((s: OpenSkyState) => {
-        const lat = Number(s?.[6]);
-        const lon = Number(s?.[5]);
-
-        return (
-          Number.isFinite(lat) &&
-          Number.isFinite(lon) &&
-          lat >= -90 &&
-          lat <= 90 &&
-          lon >= -180 &&
-          lon <= 180
-        );
-      })
-      .map((s: OpenSkyState): Flight => {
-        const altitudeMeters = Number(s?.[7] ?? 0);
-        const speedMs = Number(s?.[9] ?? 0);
-
-        return {
-          hex: String(s?.[0] ?? "").toUpperCase(),
-
-          flight: String(s?.[1] ?? "UNKNOWN").trim(),
-
-          origin_country: String(s?.[2] ?? "Unknown"),
-
-          lon: Number(s?.[5]),
-          lat: Number(s?.[6]),
-
-          alt_baro: altitudeMeters * 3.28084,
-
-          gs: speedMs * 1.94384,
-
-          track: Number(s?.[10] ?? 0),
-
-          squawk: s?.[14]
-            ? String(s[14])
-            : undefined,
-
-          category_os:
-            s?.[17] !== null &&
-            s?.[17] !== undefined
-              ? Number(s[17])
-              : undefined,
-
-          on_ground: Boolean(s?.[8]),
-
-          source: "opensky",
-
-          demo: false,
-        };
-      })
-      .filter((f: Flight) => !f.on_ground);
-
-    console.log(
-      `OpenSky aircraft received: ${flights.length}`
-    );
-
-    return flights;
+    return data.access_token ?? null;
   } catch (error) {
-    console.error("OpenSky error:", error);
-    return [];
+    console.error("OpenSky token request failed:", error);
+    return null;
   }
 }
 
-/* =========================================================
-   ADSB.FI FALLBACK
-========================================================= */
-
-async function fetchAdsbFi(): Promise<Flight[]> {
-  try {
-    const url =
-      "https://opendata.adsb.fi/api/v2/lat/20/lon/78/dist/250";
-
-    const response = await fetch(url, {
-      method: "GET",
-      headers: {
-        Accept: "application/json",
-        "User-Agent": "Orbital-Eye/1.0",
-      },
-      cache: "no-store",
-      signal: AbortSignal.timeout(10_000),
-    });
-
-    if (!response.ok) {
-      console.log(
-        `adsb.fi returned ${response.status}`
-      );
-
-      return [];
-    }
-
-    const data = await response.json();
-
-    const aircraft = Array.isArray(data?.aircraft)
-      ? data.aircraft
-      : [];
-
-    return aircraft
-      .filter((a: any) => {
-        const lat = Number(a?.lat);
-        const lon = Number(a?.lon);
-
-        return (
-          Number.isFinite(lat) &&
-          Number.isFinite(lon)
-        );
-      })
-      .map((a: any): Flight => ({
-        hex: String(
-          a?.hex ?? ""
-        ).toUpperCase(),
-
-        flight: String(
-          a?.flight ??
-            a?.callsign ??
-            "UNKNOWN"
-        ).trim(),
-
-        registration: a?.r
-          ? String(a.r)
-          : undefined,
-
-        type: a?.t
-          ? String(a.t)
-          : undefined,
-
-        origin_country: "Unknown",
-
-        lat: Number(a.lat),
-        lon: Number(a.lon),
-
-        alt_baro: Number(
-          a?.alt_baro ??
-            a?.altitude ??
-            0
-        ),
-
-        gs: Number(
-          a?.gs ??
-            a?.speed ??
-            0
-        ),
-
-        track: Number(
-          a?.track ??
-            a?.heading ??
-            0
-        ),
-
-        squawk: a?.squawk
-          ? String(a.squawk)
-          : undefined,
-
-        on_ground: Boolean(
-          a?.ground
-        ),
-
-        source: "adsb.fi",
-
-        demo: false,
-      }))
-      .filter(
-        (f: Flight) => !f.on_ground
-      );
-  } catch (error) {
-    console.error(
-      "adsb.fi error:",
-      error
-    );
-
-    return [];
-  }
+function knotsFromMs(value: unknown): number {
+  if (typeof value !== "number" || !Number.isFinite(value)) return 0;
+  return Math.round(value * 1.94384);
 }
 
-/* =========================================================
-   DEMO FALLBACK
-
-   Used ONLY when live providers return zero aircraft.
-========================================================= */
-
-function getDemoFlights(): Flight[] {
-  return [
-    {
-      hex: "DEMO001",
-      flight: "IGO-DEMO1",
-      registration: "VT-DEMO1",
-      type: "A320",
-      origin_country: "India",
-      lat: 13.0827,
-      lon: 80.2707,
-      alt_baro: 31000,
-      gs: 445,
-      track: 325,
-      squawk: "1001",
-      category_os: 4,
-      on_ground: false,
-      source: "demo",
-      demo: true,
-    },
-
-    {
-      hex: "DEMO002",
-      flight: "AIC-DEMO2",
-      registration: "VT-DEMO2",
-      type: "A321",
-      origin_country: "India",
-      lat: 12.9716,
-      lon: 77.5946,
-      alt_baro: 28000,
-      gs: 430,
-      track: 55,
-      squawk: "1002",
-      category_os: 4,
-      on_ground: false,
-      source: "demo",
-      demo: true,
-    },
-
-    {
-      hex: "DEMO003",
-      flight: "AXB-DEMO3",
-      registration: "VT-DEMO3",
-      type: "A320",
-      origin_country: "India",
-      lat: 17.385,
-      lon: 78.4867,
-      alt_baro: 33000,
-      gs: 455,
-      track: 250,
-      squawk: "1003",
-      category_os: 4,
-      on_ground: false,
-      source: "demo",
-      demo: true,
-    },
-
-    {
-      hex: "DEMO004",
-      flight: "IGO-DEMO4",
-      registration: "VT-DEMO4",
-      type: "A320",
-      origin_country: "India",
-      lat: 16.5062,
-      lon: 80.648,
-      alt_baro: 24000,
-      gs: 410,
-      track: 315,
-      squawk: "1004",
-      category_os: 4,
-      on_ground: false,
-      source: "demo",
-      demo: true,
-    },
-
-    {
-      hex: "DEMO005",
-      flight: "AI-DEMO5",
-      registration: "VT-DEMO5",
-      type: "B737",
-      origin_country: "India",
-      lat: 19.076,
-      lon: 72.8777,
-      alt_baro: 36000,
-      gs: 470,
-      track: 95,
-      squawk: "1005",
-      category_os: 4,
-      on_ground: false,
-      source: "demo",
-      demo: true,
-    },
-
-    {
-      hex: "DEMO006",
-      flight: "UK-DEMO6",
-      registration: "VT-DEMO6",
-      type: "A321",
-      origin_country: "India",
-      lat: 22.5726,
-      lon: 88.3639,
-      alt_baro: 30000,
-      gs: 440,
-      track: 180,
-      squawk: "1006",
-      category_os: 4,
-      on_ground: false,
-      source: "demo",
-      demo: true,
-    },
-
-    {
-      hex: "DEMO007",
-      flight: "IGO-DEMO7",
-      registration: "VT-DEMO7",
-      type: "A320",
-      origin_country: "India",
-      lat: 15.9129,
-      lon: 79.74,
-      alt_baro: 27000,
-      gs: 420,
-      track: 35,
-      squawk: "1007",
-      category_os: 4,
-      on_ground: false,
-      source: "demo",
-      demo: true,
-    },
-
-    {
-      hex: "DEMO008",
-      flight: "AIC-DEMO8",
-      registration: "VT-DEMO8",
-      type: "B787",
-      origin_country: "India",
-      lat: 28.6139,
-      lon: 77.209,
-      alt_baro: 39000,
-      gs: 490,
-      track: 140,
-      squawk: "1008",
-      category_os: 6,
-      on_ground: false,
-      source: "demo",
-      demo: true,
-    },
-  ];
+function feetFromMeters(value: unknown): number {
+  if (typeof value !== "number" || !Number.isFinite(value)) return 0;
+  return Math.round(value * 3.28084);
 }
 
-/* =========================================================
-   CLASSIFICATION
-========================================================= */
+function cleanCallsign(value: unknown): string {
+  if (typeof value !== "string") return "";
+  return value.trim();
+}
 
-function classifyFlights(flights: Flight[]) {
-  const commercial: Flight[] = [];
-  const privateFlights: Flight[] = [];
-  const privateJets: Flight[] = [];
-  const military: Flight[] = [];
-  const gpsJamming: Flight[] = [];
+/*
+ * OpenSky state vector:
+ *
+ * 0  = icao24
+ * 1  = callsign
+ * 2  = origin country
+ * 3  = time position
+ * 4  = last contact
+ * 5  = longitude
+ * 6  = latitude
+ * 7  = barometric altitude
+ * 8  = on ground
+ * 9  = velocity m/s
+ * 10 = true track
+ * 11 = vertical rate
+ * 12 = sensors
+ * 13 = geometric altitude
+ * 14 = squawk
+ * 15 = spi
+ * 16 = position source
+ * 17 = aircraft category
+ */
 
-  for (const flight of flights) {
-    const callsign =
-      (flight.flight || "").toUpperCase();
+function stateToFlight(state: any[]): Flight | null {
+  const icao24 = String(state?.[0] ?? "").trim();
 
-    const country =
-      (flight.origin_country || "")
-        .toUpperCase();
+  const lat = Number(state?.[6]);
+  const lng = Number(state?.[5]);
 
-    const type =
-      (flight.type || "").toUpperCase();
-
-    /* Military */
-
-    const militaryMatch =
-      callsign.includes("MIL") ||
-      callsign.includes("RCH") ||
-      callsign.includes("FORTE") ||
-      callsign.includes("NAVY") ||
-      callsign.includes("ARMY") ||
-      country.includes("MILITARY");
-
-    if (militaryMatch) {
-      military.push(flight);
-      continue;
-    }
-
-    /* Private jets */
-
-    const privateJetMatch =
-      type.includes("GULFSTREAM") ||
-      type.includes("FALCON") ||
-      type.includes("CITATION") ||
-      type.includes("LEARJET") ||
-      type.includes("CHALLENGER");
-
-    if (privateJetMatch) {
-      privateJets.push(flight);
-      continue;
-    }
-
-    /* Commercial */
-
-    const commercialMatch =
-      callsign.startsWith("IGO") ||
-      callsign.startsWith("AIC") ||
-      callsign.startsWith("AXB") ||
-      callsign.startsWith("VTI") ||
-      callsign.startsWith("SEJ") ||
-      callsign.startsWith("AKJ") ||
-      callsign.startsWith("UAE") ||
-      callsign.startsWith("QTR") ||
-      callsign.startsWith("SIA") ||
-      callsign.startsWith("BAW") ||
-      callsign.startsWith("THA") ||
-      callsign.startsWith("AI") ||
-      callsign.startsWith("UK");
-
-    if (commercialMatch) {
-      commercial.push(flight);
-      continue;
-    }
-
-    // Put other aircraft in commercial
-    // so they remain visible on the map.
-    commercial.push(flight);
+  if (!icao24 || !Number.isFinite(lat) || !Number.isFinite(lng)) {
+    return null;
   }
 
   return {
-    commercial,
-    privateFlights,
-    privateJets,
-    military,
-    gpsJamming,
+    icao24,
+    callsign: cleanCallsign(state?.[1]),
+    lat,
+    lng,
+    alt: feetFromMeters(state?.[7]),
+    speed_knots: knotsFromMs(state?.[9]),
+    heading:
+      typeof state?.[10] === "number" && Number.isFinite(state[10])
+        ? state[10]
+        : 0,
+    category: String(state?.[17] ?? ""),
+    source: "opensky",
   };
 }
 
-/* =========================================================
-   API
-========================================================= */
+/*
+ * OpenSky's aircraft category is NOT a reliable military/non-military
+ * identifier by itself.
+ *
+ * These categories are useful for separating obvious aircraft types,
+ * but military identification should come from a dedicated provider
+ * or known aircraft database.
+ */
+function classifyFlight(flight: Flight) {
+  const category = flight.category ?? "";
+
+  // OpenSky categories:
+  // 14 = UAV
+  // 15 = space/trans-atmospheric
+  //
+  // Keep these separate rather than incorrectly calling every
+  // high-performance aircraft "military".
+  if (category === "14" || category === "15") {
+    return "military";
+  }
+
+  // High-performance category.
+  // Do NOT automatically classify it as military.
+  if (category === "7") {
+    return "private";
+  }
+
+  return "commercial";
+}
+
+async function fetchOpenSky(): Promise<{
+  flights: Flight[];
+  authenticated: boolean;
+}> {
+  const token = await getOpenSkyToken();
+
+  const headers: HeadersInit = {
+    Accept: "application/json",
+  };
+
+  if (token) {
+    headers.Authorization = `Bearer ${token}`;
+  }
+
+  const url = OPENSKY_STATES_URL + INDIA_BBOX;
+
+  const response = await fetch(url, {
+    headers,
+    cache: "no-store",
+  });
+
+  if (!response.ok) {
+    throw new Error(`OpenSky returned ${response.status}`);
+  }
+
+  const data = await response.json();
+
+  const states = Array.isArray(data?.states) ? data.states : [];
+
+  const flights: Flight[] = [];
+
+  for (const state of states) {
+    const flight = stateToFlight(state);
+
+    if (!flight) continue;
+
+    // Ignore aircraft currently reported on the ground.
+    if (state?.[8] === true) continue;
+
+    flights.push(flight);
+  }
+
+  return {
+    flights,
+    authenticated: Boolean(token),
+  };
+}
 
 export async function GET() {
+  const timestamp = new Date().toISOString();
+
   try {
-    /* -----------------------------------------------------
-       CACHE
-    ----------------------------------------------------- */
+    const result = await fetchOpenSky();
 
-    if (
-      cachedFlights &&
-      Date.now() -
-        cachedFlights.timestamp <
-        CACHE_TTL
-    ) {
-      const classified =
-        classifyFlights(
-          cachedFlights.data
-        );
+    const commercial_flights: Flight[] = [];
+    const private_flights: Flight[] = [];
+    const private_jets: Flight[] = [];
+    const military_flights: Flight[] = [];
 
-      return NextResponse.json(
-        {
-          commercial_flights:
-            classified.commercial,
+    for (const flight of result.flights) {
+      const type = classifyFlight(flight);
 
-          private_flights:
-            classified.privateFlights,
-
-          private_jets:
-            classified.privateJets,
-
-          military_flights:
-            classified.military,
-
-          gps_jamming:
-            classified.gpsJamming,
-
-          total:
-            cachedFlights.data.length,
-
-          source:
-            cachedFlights.data[0]
-              ?.source ?? "cache",
-
-          providers: {
-            adsbfi_mil: 0,
-
-            adsbfi_regional: 0,
-
-            opensky:
-              cachedFlights.data.filter(
-                (f: Flight) =>
-                  f.source ===
-                  "opensky"
-              ).length,
-
-            opensky_auth:
-              Boolean(
-                process.env
-                  .OPENSKY_CLIENT_ID &&
-                process.env
-                  .OPENSKY_CLIENT_SECRET
-              ),
-
-            opensky_age_s:
-              Math.round(
-                (Date.now() -
-                  cachedFlights.timestamp) /
-                  1000
-              ),
-          },
-
-          timestamp:
-            new Date().toISOString(),
-        },
-        {
-          headers: {
-            "Cache-Control":
-              "public, max-age=10, stale-while-revalidate=30",
-          },
-        }
-      );
-    }
-
-    /* -----------------------------------------------------
-       1. OPEN SKY
-    ----------------------------------------------------- */
-
-    let flights =
-      await fetchOpenSky();
-
-    let source = "opensky";
-
-    /* -----------------------------------------------------
-       2. ADSB.FI
-    ----------------------------------------------------- */
-
-    if (flights.length === 0) {
-      await sleep(500);
-
-      const adsbFlights =
-        await fetchAdsbFi();
-
-      if (adsbFlights.length > 0) {
-        flights = adsbFlights;
-        source = "adsb.fi";
+      if (type === "military") {
+        military_flights.push(flight);
+      } else if (type === "private") {
+        private_flights.push(flight);
+      } else {
+        commercial_flights.push(flight);
       }
     }
 
-    /* -----------------------------------------------------
-       3. DEMO FALLBACK
-    ----------------------------------------------------- */
-
-    if (flights.length === 0) {
-      console.log(
-        "No live aircraft available. Using demo data."
-      );
-
-      flights =
-        getDemoFlights();
-
-      source =
-        "demo-fallback";
-    }
-
-    /* -----------------------------------------------------
-       CACHE
-    ----------------------------------------------------- */
-
-    cachedFlights = {
-      data: flights,
-      timestamp: Date.now(),
-    };
-
-    const classified =
-      classifyFlights(flights);
-
-    const openskyCount =
-      flights.filter(
-        (f: Flight) =>
-          f.source ===
-          "opensky"
-      ).length;
-
-    const adsbCount =
-      flights.filter(
-        (f: Flight) =>
-          f.source ===
-          "adsb.fi"
-      ).length;
-
-    const demoCount =
-      flights.filter(
-        (f: Flight) =>
-          f.demo === true
-      ).length;
-
-    /* -----------------------------------------------------
-       RESPONSE
-    ----------------------------------------------------- */
-
     return NextResponse.json(
       {
-        commercial_flights:
-          classified.commercial,
+        commercial_flights,
+        private_flights,
+        private_jets,
 
-        private_flights:
-          classified.privateFlights,
+        // This is intentionally only aircraft that can be
+        // defensibly classified from the live state data.
+        military_flights,
 
-        private_jets:
-          classified.privateJets,
-
-        military_flights:
-          classified.military,
-
-        gps_jamming:
-          classified.gpsJamming,
+        gps_jamming: [],
 
         total:
-          flights.length,
+          commercial_flights.length +
+          private_flights.length +
+          private_jets.length +
+          military_flights.length,
 
-        source,
-
+        source: "opensky-live",
         providers: {
-          adsbfi_mil: 0,
-
-          adsbfi_regional:
-            adsbCount,
-
-          opensky:
-            openskyCount,
-
-          opensky_auth:
-            Boolean(
-              process.env
-                .OPENSKY_CLIENT_ID &&
-              process.env
-                .OPENSKY_CLIENT_SECRET
-            ),
-
-          opensky_age_s:
-            null,
-
-          demo:
-            demoCount,
+          opensky: result.flights.length,
+          authenticated: result.authenticated,
         },
 
-        timestamp:
-          new Date().toISOString(),
+        timestamp,
       },
       {
         headers: {
           "Cache-Control":
-            "public, max-age=10, stale-while-revalidate=30",
+            "no-store, no-cache, must-revalidate, proxy-revalidate",
+          Pragma: "no-cache",
+          Expires: "0",
         },
       }
     );
   } catch (error) {
-    console.error(
-      "Flight API fatal error:",
-      error
-    );
-
-    /* -----------------------------------------------------
-       FINAL FALLBACK
-    ----------------------------------------------------- */
-
-    const demoFlights =
-      getDemoFlights();
-
-    const classified =
-      classifyFlights(
-        demoFlights
-      );
+    console.error("LIVE FLIGHT API ERROR:", error);
 
     return NextResponse.json(
       {
-        commercial_flights:
-          classified.commercial,
-
-        private_flights:
-          classified.privateFlights,
-
-        private_jets:
-          classified.privateJets,
-
-        military_flights:
-          classified.military,
-
-        gps_jamming:
-          classified.gpsJamming,
-
-        total:
-          demoFlights.length,
-
-        source:
-          "demo-fallback",
-
+        commercial_flights: [],
+        private_flights: [],
+        private_jets: [],
+        military_flights: [],
+        gps_jamming: [],
+        total: 0,
+        source: "opensky-error",
         providers: {
-          adsbfi_mil: 0,
-          adsbfi_regional: 0,
           opensky: 0,
-          opensky_auth: false,
-          opensky_age_s: null,
-          demo:
-            demoFlights.length,
+          authenticated: Boolean(
+            process.env.OPENSKY_CLIENT_ID &&
+              process.env.OPENSKY_CLIENT_SECRET
+          ),
         },
-
-        timestamp:
-          new Date().toISOString(),
+        timestamp,
+        error: "Live flight provider unavailable",
       },
       {
+        status: 200,
         headers: {
-          "Cache-Control":
-            "no-store",
+          "Cache-Control": "no-store",
         },
       }
     );

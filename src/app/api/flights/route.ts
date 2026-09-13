@@ -1,1353 +1,735 @@
-import { NextResponse } from 'next/server';
-import { stealthFetch } from '@/lib/stealthFetch';
+import { NextResponse } from "next/server";
 
 export const maxDuration = 60;
 
-/* ============================================================
-   AVIATION REGIONS
-   ============================================================ */
+type Flight = {
+  hex: string;
+  flight: string;
+  registration?: string;
+  type?: string;
+  origin_country?: string;
 
-const REGIONS = [
-  // North America
-  { lat: 39.8, lon: -98.5 },
-  { lat: 41.0, lon: -74.0 },
-  { lat: 33.0, lon: -84.0 },
-  { lat: 42.0, lon: -88.0 },
-  { lat: 30.0, lon: -97.0 },
-  { lat: 47.0, lon: -122.0 },
-  { lat: 34.0, lon: -118.0 },
-  { lat: 45.0, lon: -73.0 },
-  { lat: 49.0, lon: -97.0 },
+  lat: number;
+  lon: number;
 
-  // Europe
-  { lat: 50.0, lon: 15.0 },
-  { lat: 51.5, lon: -1.0 },
-  { lat: 47.0, lon: 2.0 },
-  { lat: 40.0, lon: -4.0 },
-  { lat: 42.0, lon: 13.0 },
-  { lat: 60.0, lon: 15.0 },
-  { lat: 52.0, lon: 22.0 },
-  { lat: 39.0, lon: 35.0 },
+  alt_baro: number;
+  alt_geom?: number;
 
-  // Middle East & South Asia
-  { lat: 25.0, lon: 45.0 },
-  { lat: 22.0, lon: 78.0 },
+  gs: number;
+  track: number;
 
-  // East Asia
-  { lat: 35.0, lon: 105.0 },
-  { lat: 35.0, lon: 136.0 },
-  { lat: 37.0, lon: 127.0 },
-  { lat: 13.0, lon: 100.0 },
-  { lat: 1.0, lon: 104.0 },
+  squawk?: string;
+  category_os?: number;
 
-  // Australia
-  { lat: -25.0, lon: 133.0 },
-  { lat: -33.0, lon: 151.0 },
+  on_ground?: boolean;
 
-  // Africa
-  { lat: 0.0, lon: 20.0 },
-  { lat: -26.0, lon: 28.0 },
+  source?: string;
+  demo?: boolean;
+};
 
-  // South America
-  { lat: -15.0, lon: -60.0 },
-  { lat: -23.0, lon: -46.0 },
-];
+type OpenSkyState = any[];
 
-const HELI_TYPES = new Set([
-  'R22', 'R44', 'R66',
-  'B06', 'B06T', 'B204', 'B205', 'B206', 'B212', 'B222',
-  'B230', 'B407', 'B412', 'B427', 'B429', 'B430', 'B505',
-  'B525',
-  'AS32', 'AS35', 'AS50', 'AS55', 'AS65',
-  'EC20', 'EC25', 'EC30', 'EC35', 'EC45', 'EC55', 'EC75',
-  'H125', 'H130', 'H135', 'H145', 'H155', 'H160',
-  'H175', 'H215', 'H225',
-  'S55', 'S58', 'S61', 'S64', 'S70', 'S76', 'S92',
-  'A109', 'A119', 'A139', 'A169', 'A189', 'AW09',
-  'MD52', 'MD60', 'MDHI', 'MD90', 'NOTR',
-  'B47G', 'HUEY', 'GAMA', 'CABR', 'EXE',
-]);
+const CACHE_TTL = 20_000;
 
-const PRIVATE_JET_TYPES = new Set([
-  'G150', 'G200', 'G280', 'GLEX', 'G500', 'G550', 'G600',
-  'G650', 'G700',
-  'GLF2', 'GLF3', 'GLF4', 'GLF5', 'GLF6',
-  'GL5T', 'GL7T', 'GV', 'GIV',
-  'CL30', 'CL35', 'CL60', 'BD70', 'BD10',
-  'C25A', 'C25B', 'C25C', 'C500', 'C510', 'C525',
-  'C550', 'C560', 'C56X', 'C680', 'C700', 'C750',
-  'E35L', 'E50P', 'E55P', 'E545', 'E550',
-  'FA50', 'FA7X', 'FA8X', 'F900', 'F2TH',
-  'LJ35', 'LJ40', 'LJ45', 'LJ60', 'LJ70', 'LJ75',
-  'PC12', 'PC24', 'TBM7', 'TBM8', 'TBM9',
-  'PRM1', 'SF50', 'EA50', 'VLJ',
-]);
+let cachedFlights: {
+  data: Flight[];
+  timestamp: number;
+} | null = null;
 
-const MILITARY_INDICATORS = new Set([
-  'C17', 'C5M', 'C130', 'C30J',
-  'KC10', 'KC46', 'KC35',
-  'E3CF', 'E3TF', 'E8A',
-  'B1B', 'B2', 'B52',
-  'F16', 'F15', 'F18', 'F22', 'F35', 'A10', 'F117',
-  'RC135', 'E6B', 'P8A', 'P3',
-  'MQ9', 'RQ4', 'U2', 'EP3', 'RC12',
-  'V22', 'CH47', 'UH60', 'AH64', 'AH1Z', 'MV22',
-  'EUFI', 'RFAL', 'TORD', 'TYP', 'GR4',
-]);
+let lastOpenSkyRequest = 0;
 
-const AIRLINER_TYPES = new Set([
-  'A319', 'A320', 'A321',
-  'A332', 'A333', 'A339', 'A343', 'A359', 'A388',
-  'B737', 'B738', 'B739', 'B38M', 'B39M',
-  'B752', 'B753', 'B763', 'B764',
-  'B772', 'B77L', 'B77W',
-  'B788', 'B789', 'B78X',
-  'E170', 'E175', 'E190', 'E195',
-  'CRJ7', 'CRJ9',
-  'AT43', 'AT72', 'DH8D',
-]);
-
-const BIZJET_OPERATORS = new Set([
-  'EJA', 'EJM', 'NJE', 'LXJ', 'FJO', 'VJT',
-  'XOJ', 'JTL', 'WUP', 'GAJ', 'DPJ', 'CLY', 'TWY',
-]);
-
-const AIRLINE_CODE_RE = /^([A-Z]{3})\d/;
-const CALLSIGN_RE = /^[A-Z0-9]{3,8}$/;
-
-const JET_CRUISE_ALT_M = 8500;
-const JET_CRUISE_KTS = 300;
-
-const ADSB_MAX_DIST = 250;
-const ADSBFI_BASE = 'https://opendata.adsb.fi/api/v2';
-const ADSBFI_GAP_MS = 1100;
-
-/* ============================================================
-   ADSB.FI REGIONAL FALLBACK
-   ============================================================ */
-
-async function fetchAdsbFiRegion(
-  lat: number,
-  lon: number
-): Promise<any[]> {
-  try {
-    const res = await stealthFetch(
-      `${ADSBFI_BASE}/lat/${lat}/lon/${lon}/dist/${ADSB_MAX_DIST}`,
-      {
-        signal: AbortSignal.timeout(12000),
-      }
-    );
-
-    if (res.ok) {
-      const data = await res.json();
-      return data.ac || [];
-    }
-
-    await res.body?.cancel();
-  } catch {}
-
-  return [];
+function sleep(ms: number) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-/* ============================================================
-   FLIGHT CLASSIFIER
-   ============================================================ */
+/* ---------------------------------------------------------
+   OPEN SKY
+--------------------------------------------------------- */
 
-function classifyFlight(f: any) {
-  const modelUpper = (f.t || '').toUpperCase();
-  const flightStr = (f.flight || '').trim().toUpperCase();
-  const dbFlags = f.dbFlags || 0;
+async function fetchOpenSky(): Promise<Flight[]> {
+  const now = Date.now();
 
-  if (modelUpper === 'TWR') return null;
-
-  const lat = f.lat;
-  const lon = f.lon;
-
-  if (lat == null || lon == null) return null;
-
-  const callsign = flightStr || f.hex || 'UNKNOWN';
-
-  const altRaw = f.alt_baro;
-
-  const altMeters =
-    typeof altRaw === 'number'
-      ? altRaw * 0.3048
-      : 0;
-
-  const speedKnots =
-    typeof f.gs === 'number'
-      ? Math.round(f.gs * 10) / 10
-      : null;
-
-  const heading =
-    typeof f.track === 'number'
-      ? f.track
-      : 0;
-
-  const isHeli =
-    HELI_TYPES.has(modelUpper) ||
-    f.category_os === 8;
-
-  const isGrounded =
-    typeof altRaw === 'number' &&
-    altRaw < 100;
-
-  const isOsMilitary =
-    f.category_os === 14;
-
-  const isOsHighPerf =
-    f.category_os === 7;
-
-  const isOsLight =
-    f.category_os === 2;
-
-  const isOsHeavy =
-    f.category_os === 4 ||
-    f.category_os === 5 ||
-    f.category_os === 6;
-
-  const airlineMatch =
-    AIRLINE_CODE_RE.exec(callsign);
-
-  const airlineCode =
-    airlineMatch
-      ? airlineMatch[1]
-      : '';
-
-  const isGaCallsign =
-    !airlineCode &&
-    CALLSIGN_RE.test(flightStr);
-
-  const cruisesLikeAJet =
-    altMeters > JET_CRUISE_ALT_M &&
-    (speedKnots ?? 0) > JET_CRUISE_KTS;
-
-  let category:
-    | 'commercial'
-    | 'private'
-    | 'jet'
-    | 'military' = 'commercial';
-
-  if (
-    isOsMilitary ||
-    dbFlags & 1 ||
-    MILITARY_INDICATORS.has(modelUpper) ||
-    /^(RCH|KING|DUKE|EVAC|JAKE|REACH|CONVOY)\d/i.test(
-      f.flight || ''
-    )
-  ) {
-    category = 'military';
+  // Anonymous OpenSky should not be polled continuously.
+  if (now - lastOpenSkyRequest < 10_000) {
+    return cachedFlights?.data ?? [];
   }
 
-  else if (
-    AIRLINER_TYPES.has(modelUpper) ||
-    isOsHeavy
-  ) {
-    category = 'commercial';
-  }
+  lastOpenSkyRequest = now;
 
-  else if (
-    BIZJET_OPERATORS.has(airlineCode) ||
-    PRIVATE_JET_TYPES.has(modelUpper) ||
-    isOsHighPerf ||
-    (isGaCallsign && cruisesLikeAJet)
-  ) {
-    category = 'jet';
-  }
-
-  else if (
-    isGaCallsign ||
-    isOsLight
-  ) {
-    category = 'private';
-  }
-
-  return {
-    callsign,
-
-    lat:
-      Math.round(lat * 100000) / 100000,
-
-    lng:
-      Math.round(lon * 100000) / 100000,
-
-    alt:
-      Math.round(altMeters),
-
-    heading:
-      Math.round(heading),
-
-    speed_knots:
-      speedKnots,
-
-    model:
-      f.t || 'Unknown',
-
-    icao24:
-      f.hex || '',
-
-    registration:
-      f.r || 'N/A',
-
-    squawk:
-      f.squawk || '',
-
-    airline_code:
-      airlineCode,
-
-    aircraft_category:
-      isHeli ? 'heli' : 'plane',
-
-    category,
-
-    grounded:
-      isGrounded,
-
-    nac_p:
-      f.nac_p,
-
-    type:
-      'flight',
-  };
-}
-
-/* ============================================================
-   CACHE
-   ============================================================ */
-
-let cachedData: any = null;
-let lastFetchTime = 0;
-
-const CACHE_TTL = 90000;
-
-/*
- * Authenticated OpenSky:
- * approximately one request every 90 seconds.
- *
- * Anonymous OpenSky:
- * use a much longer interval because of the smaller
- * anonymous allowance.
- */
-const hasOpenSkyCreds = () =>
-  Boolean(
-    process.env.OPENSKY_CLIENT_ID &&
-    process.env.OPENSKY_CLIENT_SECRET
-  );
-
-const openSkyInterval = () =>
-  hasOpenSkyCreds()
-    ? 90000
-    : 900000;
-
-let osSnapshot: any[] = [];
-let osSnapshotTime = 0;
-
-let fetchPromise:
-  Promise<any> | null = null;
-
-let openSkyCooldownUntil = 0;
-
-const OPENSKY_COOLDOWN =
-  15 * 60 * 1000;
-
-/* ============================================================
-   OPENSKY TOKEN
-   ============================================================ */
-
-let osToken: string | null = null;
-let osTokenExpiry = 0;
-
-async function getOpenSkyToken(): Promise<string | null> {
-  const id =
-    process.env.OPENSKY_CLIENT_ID;
-
-  const secret =
-    process.env.OPENSKY_CLIENT_SECRET;
-
-  if (!id || !secret) {
-    return null;
-  }
-
-  if (
-    osToken &&
-    Date.now() < osTokenExpiry
-  ) {
-    return osToken;
-  }
+  // India + surrounding South Asia.
+  // Smaller bounding boxes cost fewer OpenSky credits.
+  const url =
+    "https://opensky-network.org/api/states/all" +
+    "?lamin=5" +
+    "&lomin=65" +
+    "&lamax=37" +
+    "&lomax=100" +
+    "&extended=1";
 
   try {
-    const res = await fetch(
-      'https://auth.opensky-network.org/auth/realms/opensky-network/protocol/openid-connect/token',
-      {
-        method: 'POST',
+    const response = await fetch(url, {
+      method: "GET",
+      headers: {
+        Accept: "application/json",
+        "User-Agent": "Orbital-Eye/1.0",
+      },
+      cache: "no-store",
+      signal: AbortSignal.timeout(15_000),
+    });
 
-        headers: {
-          'Content-Type':
-            'application/x-www-form-urlencoded',
-        },
-
-        body: new URLSearchParams({
-          grant_type:
-            'client_credentials',
-
-          client_id: id,
-
-          client_secret: secret,
-        }),
-
-        signal:
-          AbortSignal.timeout(10000),
-      }
-    );
-
-    if (!res.ok) {
-      console.warn(
-        '[OSIRIS] OpenSky token failed:',
-        res.status
-      );
-
-      return null;
-    }
-
-    const data =
-      await res.json();
-
-    if (!data.access_token) {
-      console.warn(
-        '[OSIRIS] OpenSky token response missing access_token'
-      );
-
-      return null;
-    }
-
-    osToken =
-      data.access_token;
-
-    osTokenExpiry =
-      Date.now() +
-      ((data.expires_in || 1800) - 60) *
-        1000;
-
-    return osToken;
-  }
-
-  catch (e) {
-    console.warn(
-      '[OSIRIS] OpenSky token error:',
-      e
-    );
-
-    return null;
-  }
-}
-
-/* ============================================================
-   DEDUPLICATION
-   ============================================================ */
-
-function ingestAc(
-  raw: any[],
-  into: any[],
-  seen: Set<string>
-) {
-  for (const ac of raw) {
-    const hex =
-      (ac.hex || '')
-        .toLowerCase()
-        .trim();
-
-    if (
-      hex &&
-      !seen.has(hex)
-    ) {
-      seen.add(hex);
-      into.push(ac);
-    }
-  }
-}
-
-/* ============================================================
-   OPENSKY STATE VECTOR CONVERTER
-   ============================================================ */
-
-function convertOpenSkyStates(
-  states: any[]
-): any[] {
-  return states
-    .filter(
-      (s: any[]) =>
-        Array.isArray(s) &&
-        s.length >= 11 &&
-        s[0] &&
-        s[5] != null &&
-        s[6] != null
-    )
-    .map((s: any[]) => ({
-      /*
-       * OpenSky state-vector fields:
-       *
-       * 0  ICAO24
-       * 1  callsign
-       * 5  longitude
-       * 6  latitude
-       * 7  barometric altitude (meters)
-       * 9  velocity (m/s)
-       * 10 true track
-       * 14 squawk
-       * 17 emitter category when extended=1
-       */
-
-      hex:
-        s[0],
-
-      flight:
-        typeof s[1] === 'string'
-          ? s[1].trim()
-          : '',
-
-      lon:
-        typeof s[5] === 'number'
-          ? s[5]
-          : null,
-
-      lat:
-        typeof s[6] === 'number'
-          ? s[6]
-          : null,
-
-      /*
-       * Convert meters → feet because the rest of the
-       * application expects alt_baro in feet.
-       */
-      alt_baro:
-        typeof s[7] === 'number'
-          ? s[7] * 3.28084
-          : null,
-
-      /*
-       * Convert m/s → knots.
-       */
-      gs:
-        typeof s[9] === 'number'
-          ? s[9] * 1.94384
-          : null,
-
-      track:
-        typeof s[10] === 'number'
-          ? s[10]
-          : 0,
-
-      squawk:
-        s[14] || '',
-
-      category_os:
-        s[17],
-
-      /*
-       * OpenSky state vectors normally do not contain
-       * registration or aircraft model.
-       */
-      r:
-        'N/A',
-
-      t:
-        '',
-    }));
-}
-
-/* ============================================================
-   FETCH OPENSKY
-   ============================================================ */
-
-async function fetchOpenSky(
-  token: string | null
-): Promise<any[]> {
-
-  const osInit: RequestInit =
-    token
-      ? {
-          signal:
-            AbortSignal.timeout(30000),
-
-          headers: {
-            Authorization:
-              `Bearer ${token}`,
-          },
-        }
-      : {
-          signal:
-            AbortSignal.timeout(30000),
-        };
-
-  /*
-   * PRIMARY:
-   *
-   * India + surrounding South Asia.
-   *
-   * This is much smaller than requesting the entire
-   * global aircraft state database.
-   */
-  const INDIA_URL =
-    'https://opensky-network.org/api/states/all' +
-    '?lamin=5' +
-    '&lomin=65' +
-    '&lamax=37' +
-    '&lomax=100' +
-    '&extended=1';
-
-  try {
-    console.log(
-      '[OSIRIS] Requesting OpenSky India/South Asia data...'
-    );
-
-    const res =
-      await stealthFetch(
-        INDIA_URL,
-        osInit
-      );
-
-    if (res.status === 429) {
-      console.warn(
-        '[OSIRIS] OpenSky India request returned 429'
-      );
-
-      openSkyCooldownUntil =
-        Date.now() +
-        OPENSKY_COOLDOWN;
-
-      await res.body?.cancel();
-
-      return [];
-    }
-
-    if (res.ok) {
-      const data =
-        await res.json();
-
-      const states =
-        Array.isArray(data.states)
-          ? data.states
-          : [];
-
-      const converted =
-        convertOpenSkyStates(states);
-
+    if (!response.ok) {
       console.log(
-        `[OSIRIS] OpenSky India returned ${converted.length} aircraft`
+        `OpenSky returned ${response.status}: ${response.statusText}`
       );
-
-      /*
-       * IMPORTANT:
-       *
-       * Accept even a small valid result.
-       *
-       * The old code required >100 aircraft and discarded
-       * smaller valid responses.
-       */
-      if (converted.length > 0) {
-        return converted;
-      }
-    }
-
-    else {
-      console.warn(
-        '[OSIRIS] OpenSky India returned',
-        res.status
-      );
-
-      await res.body?.cancel();
-    }
-  }
-
-  catch (e) {
-    console.warn(
-      '[OSIRIS] OpenSky India request error:',
-      e
-    );
-  }
-
-  /*
-   * SECONDARY:
-   *
-   * If India query fails, try global OpenSky.
-   *
-   * This is only a fallback, not the normal request.
-   */
-  try {
-    console.log(
-      '[OSIRIS] India query empty — trying global OpenSky...'
-    );
-
-    const GLOBAL_URL =
-      'https://opensky-network.org/api/states/all?extended=1';
-
-    const res =
-      await stealthFetch(
-        GLOBAL_URL,
-        osInit
-      );
-
-    if (res.status === 429) {
-      console.warn(
-        '[OSIRIS] Global OpenSky returned 429'
-      );
-
-      openSkyCooldownUntil =
-        Date.now() +
-        OPENSKY_COOLDOWN;
-
-      await res.body?.cancel();
-
       return [];
     }
 
-    if (!res.ok) {
-      console.warn(
-        '[OSIRIS] Global OpenSky returned',
-        res.status
-      );
+    const data = await response.json();
 
-      await res.body?.cancel();
+    const states: OpenSkyState[] = Array.isArray(data?.states)
+      ? data.states
+      : [];
 
+    if (states.length === 0) {
+      console.log("OpenSky returned 0 aircraft");
       return [];
     }
 
-    const data =
-      await res.json();
+    const flights: Flight[] = states
+      .filter((s) => {
+        const lat = Number(s?.[6]);
+        const lon = Number(s?.[5]);
 
-    const states =
-      Array.isArray(data.states)
-        ? data.states
-        : [];
+        return (
+          Number.isFinite(lat) &&
+          Number.isFinite(lon) &&
+          lat >= -90 &&
+          lat <= 90 &&
+          lon >= -180 &&
+          lon <= 180
+        );
+      })
+      .map((s) => {
+        const altitudeMeters = Number(s?.[7] ?? 0);
+        const speedMs = Number(s?.[9] ?? 0);
 
-    const converted =
-      convertOpenSkyStates(states);
+        return {
+          hex: String(s?.[0] ?? "").toUpperCase(),
 
-    console.log(
-      `[OSIRIS] Global OpenSky returned ${converted.length} aircraft`
-    );
+          flight: String(s?.[1] ?? "UNKNOWN").trim(),
 
-    return converted;
-  }
+          origin_country: String(s?.[2] ?? "Unknown"),
 
-  catch (e) {
-    console.warn(
-      '[OSIRIS] Global OpenSky error:',
-      e
-    );
+          lon: Number(s?.[5]),
+          lat: Number(s?.[6]),
 
+          // meters -> feet
+          alt_baro: altitudeMeters * 3.28084,
+
+          // m/s -> knots
+          gs: speedMs * 1.94384,
+
+          track: Number(s?.[10] ?? 0),
+
+          squawk: s?.[14] ? String(s[14]) : undefined,
+
+          category_os:
+            s?.[17] !== null && s?.[17] !== undefined
+              ? Number(s[17])
+              : undefined,
+
+          on_ground: Boolean(s?.[8]),
+
+          source: "opensky",
+          demo: false,
+        };
+      })
+      .filter((f) => !f.on_ground);
+
+    console.log(`OpenSky aircraft received: ${flights.length}`);
+
+    return flights;
+  } catch (error) {
+    console.error("OpenSky error:", error);
     return [];
   }
 }
 
-/* ============================================================
-   GET
-   ============================================================ */
+/* ---------------------------------------------------------
+   ADSB.FI FALLBACK
+--------------------------------------------------------- */
 
-export async function GET() {
-  const now =
-    Date.now();
+async function fetchAdsbFi(): Promise<Flight[]> {
+  try {
+    const url =
+      "https://opendata.adsb.fi/api/v2/lat/20/lon/78/dist/250";
 
-  /*
-   * Normal response cache.
-   */
-  if (
-    cachedData &&
-    now - lastFetchTime <
-      CACHE_TTL
-  ) {
-    return NextResponse.json(
-      cachedData,
-      {
-        headers: {
-          'Cache-Control':
-            'public, s-maxage=30, stale-while-revalidate=60',
-        },
-      }
-    );
+    const response = await fetch(url, {
+      method: "GET",
+      headers: {
+        Accept: "application/json",
+        "User-Agent": "Orbital-Eye/1.0",
+      },
+      cache: "no-store",
+      signal: AbortSignal.timeout(10_000),
+    });
+
+    if (!response.ok) {
+      console.log(`adsb.fi returned ${response.status}`);
+      return [];
+    }
+
+    const data = await response.json();
+
+    const aircraft = Array.isArray(data?.aircraft)
+      ? data.aircraft
+      : [];
+
+    return aircraft
+      .filter((a: any) => {
+        const lat = Number(a?.lat);
+        const lon = Number(a?.lon);
+
+        return (
+          Number.isFinite(lat) &&
+          Number.isFinite(lon)
+        );
+      })
+      .map((a: any): Flight => ({
+        hex: String(a?.hex ?? "").toUpperCase(),
+
+        flight: String(
+          a?.flight ??
+          a?.callsign ??
+          "UNKNOWN"
+        ).trim(),
+
+        registration: a?.r
+          ? String(a.r)
+          : undefined,
+
+        type: a?.t
+          ? String(a.t)
+          : undefined,
+
+        origin_country: "Unknown",
+
+        lat: Number(a.lat),
+        lon: Number(a.lon),
+
+        alt_baro:
+          Number(a?.alt_baro ?? a?.altitude ?? 0),
+
+        gs:
+          Number(a?.gs ?? a?.speed ?? 0),
+
+        track:
+          Number(a?.track ?? a?.heading ?? 0),
+
+        squawk: a?.squawk
+          ? String(a.squawk)
+          : undefined,
+
+        on_ground: Boolean(a?.ground),
+
+        source: "adsb.fi",
+        demo: false,
+      }))
+      .filter((f) => !f.on_ground);
+  } catch (error) {
+    console.error("adsb.fi error:", error);
+    return [];
+  }
+}
+
+/* ---------------------------------------------------------
+   DEMO FALLBACK
+   ---------------------------------------------------------
+
+   IMPORTANT:
+   These are demonstration positions, NOT live aircraft.
+   They are used only when live providers return zero data,
+   so the Expo interface does not remain empty.
+--------------------------------------------------------- */
+
+function getDemoFlights(): Flight[] {
+  return [
+    {
+      hex: "DEMO001",
+      flight: "IGO-DEMO1",
+      registration: "VT-DEMO",
+      type: "A320",
+      origin_country: "India",
+      lat: 13.0827,
+      lon: 80.2707,
+      alt_baro: 31000,
+      gs: 445,
+      track: 325,
+      squawk: "1001",
+      category_os: 4,
+      on_ground: false,
+      source: "demo",
+      demo: true,
+    },
+
+    {
+      hex: "DEMO002",
+      flight: "AIC-DEMO2",
+      registration: "VT-DEMO2",
+      type: "A321",
+      origin_country: "India",
+      lat: 12.9716,
+      lon: 77.5946,
+      alt_baro: 28000,
+      gs: 430,
+      track: 55,
+      squawk: "1002",
+      category_os: 4,
+      on_ground: false,
+      source: "demo",
+      demo: true,
+    },
+
+    {
+      hex: "DEMO003",
+      flight: "AXB-DEMO3",
+      registration: "VT-DEMO3",
+      type: "A320",
+      origin_country: "India",
+      lat: 17.385,
+      lon: 78.4867,
+      alt_baro: 33000,
+      gs: 455,
+      track: 250,
+      squawk: "1003",
+      category_os: 4,
+      on_ground: false,
+      source: "demo",
+      demo: true,
+    },
+
+    {
+      hex: "DEMO004",
+      flight: "IGO-DEMO4",
+      registration: "VT-DEMO4",
+      type: "A320",
+      origin_country: "India",
+      lat: 16.5062,
+      lon: 80.648,
+      alt_baro: 24000,
+      gs: 410,
+      track: 315,
+      squawk: "1004",
+      category_os: 4,
+      on_ground: false,
+      source: "demo",
+      demo: true,
+    },
+
+    {
+      hex: "DEMO005",
+      flight: "AI-DEMO5",
+      registration: "VT-DEMO5",
+      type: "B737",
+      origin_country: "India",
+      lat: 19.076,
+      lon: 72.8777,
+      alt_baro: 36000,
+      gs: 470,
+      track: 95,
+      squawk: "1005",
+      category_os: 4,
+      on_ground: false,
+      source: "demo",
+      demo: true,
+    },
+
+    {
+      hex: "DEMO006",
+      flight: "UK-DEMO6",
+      registration: "VT-DEMO6",
+      type: "A321",
+      origin_country: "India",
+      lat: 22.5726,
+      lon: 88.3639,
+      alt_baro: 30000,
+      gs: 440,
+      track: 180,
+      squawk: "1006",
+      category_os: 4,
+      on_ground: false,
+      source: "demo",
+      demo: true,
+    },
+
+    {
+      hex: "DEMO007",
+      flight: "IGO-DEMO7",
+      registration: "VT-DEMO7",
+      type: "A320",
+      origin_country: "India",
+      lat: 15.9129,
+      lon: 79.74,
+      alt_baro: 27000,
+      gs: 420,
+      track: 35,
+      squawk: "1007",
+      category_os: 4,
+      on_ground: false,
+      source: "demo",
+      demo: true,
+    },
+
+    {
+      hex: "DEMO008",
+      flight: "AIC-DEMO8",
+      registration: "VT-DEMO8",
+      type: "B787",
+      origin_country: "India",
+      lat: 28.6139,
+      lon: 77.209,
+      alt_baro: 39000,
+      gs: 490,
+      track: 140,
+      squawk: "1008",
+      category_os: 6,
+      on_ground: false,
+      source: "demo",
+      demo: true,
+    },
+  ];
+}
+
+/* ---------------------------------------------------------
+   CLASSIFICATION
+--------------------------------------------------------- */
+
+function classifyFlights(flights: Flight[]) {
+  const commercial: Flight[] = [];
+  const privateFlights: Flight[] = [];
+  const privateJets: Flight[] = [];
+  const military: Flight[] = [];
+  const gpsJamming: Flight[] = [];
+
+  for (const flight of flights) {
+    const callsign = (
+      flight.flight ||
+      ""
+    ).toUpperCase();
+
+    const country = (
+      flight.origin_country ||
+      ""
+    ).toUpperCase();
+
+    const type = (
+      flight.type ||
+      ""
+    ).toUpperCase();
+
+    // Military indicators
+    const militaryMatch =
+      callsign.includes("MIL") ||
+      callsign.includes("AF") ||
+      callsign.includes("RCH") ||
+      callsign.includes("FORTE") ||
+      callsign.includes("NAVY") ||
+      callsign.includes("ARMY") ||
+      country.includes("MILITARY");
+
+    if (militaryMatch) {
+      military.push(flight);
+      continue;
+    }
+
+    // Private jet indicators
+    const privateJetMatch =
+      type.includes("GULFSTREAM") ||
+      type.includes("FALCON") ||
+      type.includes("CITATION") ||
+      type.includes("LEARJET") ||
+      type.includes("CHALLENGER");
+
+    if (privateJetMatch) {
+      privateJets.push(flight);
+      continue;
+    }
+
+    // Commercial airline indicators
+    const commercialMatch =
+      callsign.startsWith("IGO") ||
+      callsign.startsWith("AIC") ||
+      callsign.startsWith("AXB") ||
+      callsign.startsWith("VTI") ||
+      callsign.startsWith("SEJ") ||
+      callsign.startsWith("AKJ") ||
+      callsign.startsWith("UAE") ||
+      callsign.startsWith("QTR") ||
+      callsign.startsWith("SIA") ||
+      callsign.startsWith("BAW") ||
+      callsign.startsWith("THA") ||
+      callsign.startsWith("AI") ||
+      callsign.startsWith("UK");
+
+    if (commercialMatch) {
+      commercial.push(flight);
+      continue;
+    }
+
+    // General aircraft → commercial for map visibility
+    commercial.push(flight);
   }
 
-  /*
-   * Prevent multiple simultaneous expensive requests.
-   */
-  if (fetchPromise) {
-    try {
-      const data =
-        await fetchPromise;
+  return {
+    commercial,
+    privateFlights,
+    privateJets,
+    military,
+    gpsJamming,
+  };
+}
+
+/* ---------------------------------------------------------
+   API
+--------------------------------------------------------- */
+
+export async function GET() {
+  try {
+    // Use short server-side cache
+    if (
+      cachedFlights &&
+      Date.now() - cachedFlights.timestamp < CACHE_TTL
+    ) {
+      const classified = classifyFlights(
+        cachedFlights.data
+      );
 
       return NextResponse.json(
-        data,
+        {
+          commercial_flights:
+            classified.commercial,
+
+          private_flights:
+            classified.privateFlights,
+
+          private_jets:
+            classified.privateJets,
+
+          military_flights:
+            classified.military,
+
+          gps_jamming:
+            classified.gpsJamming,
+
+          total: cachedFlights.data.length,
+
+          source:
+            cachedFlights.data[0]?.source ??
+            "cache",
+
+          providers: {
+            adsbfi_mil: 0,
+            adsbfi_regional: 0,
+
+            opensky:
+              cachedFlights.data.filter(
+                (f) => f.source === "opensky"
+              ).length,
+
+            opensky_auth:
+              Boolean(
+                process.env.OPENSKY_CLIENT_ID &&
+                process.env.OPENSKY_CLIENT_SECRET
+              ),
+
+            opensky_age_s: Math.round(
+              (Date.now() -
+                cachedFlights.timestamp) /
+                1000
+            ),
+          },
+
+          timestamp:
+            new Date().toISOString(),
+        },
         {
           headers: {
-            'Cache-Control':
-              'public, s-maxage=30, stale-while-revalidate=60',
+            "Cache-Control":
+              "public, max-age=10, stale-while-revalidate=30",
           },
         }
       );
     }
 
-    catch {
-      return NextResponse.json(
-        {
-          error:
-            'Failed to fetch flight data',
-        },
-        {
-          status: 500,
-        }
-      );
+    /* ---------------------------------------------
+       1. Try OpenSky
+    --------------------------------------------- */
+
+    let flights = await fetchOpenSky();
+
+    let source = "opensky";
+
+    /* ---------------------------------------------
+       2. Try ADSB.FI if OpenSky empty
+    --------------------------------------------- */
+
+    if (flights.length === 0) {
+      await sleep(500);
+
+      const adsbFlights =
+        await fetchAdsbFi();
+
+      if (adsbFlights.length > 0) {
+        flights = adsbFlights;
+        source = "adsb.fi";
+      }
     }
-  }
 
-  const JAMMING_NACAP_THRESHOLD = 4;
+    /* ---------------------------------------------
+       3. DEMO FALLBACK
+    --------------------------------------------- */
 
-  fetchPromise =
-    (async () => {
-
-      const allRaw: any[] = [];
-      const seenHex =
-        new Set<string>();
-
-      let source: string;
-
-      /* ======================================================
-         OPEN SKY INTERVAL
-         ====================================================== */
-
-      const skipOpenSky =
-        Date.now() <
-          openSkyCooldownUntil ||
-        Date.now() -
-          osSnapshotTime <
-          openSkyInterval();
-
-      let token:
-        string | null = null;
-
-      if (!skipOpenSky) {
-        token =
-          await getOpenSkyToken();
-      }
-
-      /*
-       * Military feed and OpenSky run in parallel.
-       */
-      const [milRes, osRes] =
-        await Promise.allSettled([
-
-          /*
-           * Always get military aircraft.
-           */
-          stealthFetch(
-            `${ADSBFI_BASE}/mil`,
-            {
-              signal:
-                AbortSignal.timeout(15000),
-            }
-          ),
-
-          /*
-           * Skip OpenSky while cooldown/snapshot
-           * interval is active.
-           */
-          skipOpenSky
-            ? Promise.reject(
-                new Error(
-                  'OpenSky in cooldown'
-                )
-              )
-            : fetchOpenSky(token),
-        ]);
-
-      /* ======================================================
-         MILITARY FEED
-         ====================================================== */
-
-      if (
-        milRes.status ===
-        'fulfilled'
-      ) {
-
-        if (
-          milRes.value.ok
-        ) {
-
-          try {
-            const data =
-              await milRes.value.json();
-
-            ingestAc(
-              data.ac || [],
-              allRaw,
-              seenHex
-            );
-          }
-
-          catch (e) {
-            console.warn(
-              '[OSIRIS] adsb.fi military parse error:',
-              e
-            );
-          }
-        }
-
-        else {
-          console.warn(
-            '[OSIRIS] adsb.fi military feed returned',
-            milRes.value.status
-          );
-
-          await milRes.value.body?.cancel();
-        }
-      }
-
-      const milCount =
-        allRaw.length;
-
-      /* ======================================================
-         OPENSKY SNAPSHOT
-         ====================================================== */
-
-      if (
-        osRes.status ===
-        'fulfilled'
-      ) {
-
-        const states =
-          osRes.value;
-
-        /*
-         * NEW:
-         *
-         * Any valid OpenSky aircraft can become the snapshot.
-         */
-        if (
-          Array.isArray(states) &&
-          states.length > 0
-        ) {
-
-          osSnapshot =
-            states;
-
-          osSnapshotTime =
-            Date.now();
-
-          console.log(
-            `[OSIRIS] Saved ${osSnapshot.length} OpenSky aircraft`
-          );
-        }
-      }
-
-      else {
-
-        console.warn(
-          '[OSIRIS] OpenSky skipped/unavailable:',
-          osRes.reason?.message ||
-            'unknown'
-        );
-      }
-
-      /*
-       * Add the most recent OpenSky snapshot.
-       */
-      ingestAc(
-        osSnapshot,
-        allRaw,
-        seenHex
+    if (flights.length === 0) {
+      console.log(
+        "No live aircraft available. Using demo flight data."
       );
 
-      const openSkyWorked =
-        osSnapshot.length > 0;
+      flights = getDemoFlights();
+      source = "demo-fallback";
+    }
 
-      /* ======================================================
-         REGIONAL ADSB.FI FALLBACK
-         ====================================================== */
+    /* ---------------------------------------------
+       Cache
+    --------------------------------------------- */
 
-      if (!openSkyWorked) {
+    cachedFlights = {
+      data: flights,
+      timestamp: Date.now(),
+    };
 
-        source =
-          'regional';
+    const classified =
+      classifyFlights(flights);
 
-        console.warn(
-          '[OSIRIS] No OpenSky snapshot — falling back to adsb.fi regional sweep'
-        );
+    const openskyCount =
+      flights.filter(
+        (f) => f.source === "opensky"
+      ).length;
 
-        for (
-          const r of REGIONS
-        ) {
+    const adsbCount =
+      flights.filter(
+        (f) => f.source === "adsb.fi"
+      ).length;
 
-          const regional =
-            await fetchAdsbFiRegion(
-              r.lat,
-              r.lon
-            );
+    const demoCount =
+      flights.filter(
+        (f) => f.demo === true
+      ).length;
 
-          ingestAc(
-            regional,
-            allRaw,
-            seenHex
-          );
-
-          await new Promise(
-            resolve =>
-              setTimeout(
-                resolve,
-                ADSBFI_GAP_MS
-              )
-          );
-        }
-
-        if (
-          allRaw.length === 0
-        ) {
-          console.error(
-            '[OSIRIS] Every flight provider returned zero aircraft.'
-          );
-        }
-      }
-
-      else {
-
-        source =
-          hasOpenSkyCreds()
-            ? 'opensky-auth'
-            : 'opensky-anon';
-      }
-
-      /* ======================================================
-         CLASSIFICATION
-         ====================================================== */
-
-      const commercial: any[] = [];
-      const privateFl: any[] = [];
-      const jets: any[] = [];
-      const military: any[] = [];
-      const gpsJamming: any[] = [];
-
-      for (
-        const raw of allRaw
-      ) {
-
-        const flight =
-          classifyFlight(raw);
-
-        if (!flight) {
-          continue;
-        }
-
-        /*
-         * GPS jamming detection.
-         */
-        if (
-          typeof flight.nac_p ===
-            'number' &&
-          flight.nac_p <=
-            JAMMING_NACAP_THRESHOLD &&
-          !flight.grounded
-        ) {
-
-          gpsJamming.push({
-            lat:
-              flight.lat,
-
-            lng:
-              flight.lng,
-
-            nac_p:
-              flight.nac_p,
-
-            callsign:
-              flight.callsign,
-          });
-        }
-
-        switch (
-          flight.category
-        ) {
-
-          case 'military':
-            military.push(
-              flight
-            );
-            break;
-
-          case 'jet':
-            jets.push(
-              flight
-            );
-            break;
-
-          case 'private':
-            privateFl.push(
-              flight
-            );
-            break;
-
-          default:
-            commercial.push(
-              flight
-            );
-        }
-      }
-
-      /* ======================================================
-         RESPONSE
-         ====================================================== */
-
-      return {
-
+    return NextResponse.json(
+      {
         commercial_flights:
-          commercial,
+          classified.commercial,
 
         private_flights:
-          privateFl,
+          classified.privateFlights,
 
         private_jets:
-          jets,
+          classified.privateJets,
 
         military_flights:
-          military,
+          classified.military,
 
         gps_jamming:
-          aggregateJamming(
-            gpsJamming,
-            JAMMING_NACAP_THRESHOLD
-          ),
+          classified.gpsJamming,
 
-        total:
-          allRaw.length,
+        total: flights.length,
 
         source,
 
         providers: {
-
-          adsbfi_mil:
-            milCount,
+          adsbfi_mil: 0,
 
           adsbfi_regional:
-            openSkyWorked
-              ? 0
-              : Math.max(
-                  0,
-                  allRaw.length -
-                    milCount
-                ),
+            adsbCount,
 
           opensky:
-            osSnapshot.length,
+            openskyCount,
 
           opensky_auth:
-            hasOpenSkyCreds(),
+            Boolean(
+              process.env.OPENSKY_CLIENT_ID &&
+              process.env.OPENSKY_CLIENT_SECRET
+            ),
 
-          opensky_age_s:
-            osSnapshotTime
-              ? Math.round(
-                  (
-                    Date.now() -
-                    osSnapshotTime
-                  ) / 1000
-                )
-              : null,
+          opensky_age_s: null,
+
+          demo:
+            demoCount,
         },
 
         timestamp:
           new Date().toISOString(),
-      };
-    })();
-
-  /* ============================================================
-     FINAL RESPONSE
-     ============================================================ */
-
-  try {
-
-    const data =
-      await fetchPromise;
-
-    cachedData =
-      data;
-
-    lastFetchTime =
-      Date.now();
-
-    fetchPromise =
-      null;
-
-    return NextResponse.json(
-      data,
+      },
       {
         headers: {
-          'Cache-Control':
-            data.total < 100
-              ? 'no-store, max-age=0'
-              : 'public, s-maxage=30, stale-while-revalidate=60',
+          "Cache-Control":
+            "public, max-age=10, stale-while-revalidate=30",
         },
       }
     );
-  }
-
-  catch (error) {
-
+  } catch (error) {
     console.error(
-      '[OSIRIS] Flight fetch error:',
+      "Flight API fatal error:",
       error
     );
 
-    fetchPromise =
-      null;
+    // Even if everything fails, return demo data
+    // so the Expo interface doesn't become empty.
+    const demoFlights =
+      getDemoFlights();
 
-    /*
-     * Never blank the map if we have previous data.
-     */
-    if (cachedData) {
-
-      console.warn(
-        '[OSIRIS] Returning stale flight cache as fallback'
-      );
-
-      return NextResponse.json(
-        {
-          ...cachedData,
-
-          source:
-            (
-              cachedData.source ||
-              'unknown'
-            ) + '+stale',
-        },
-        {
-          headers: {
-            'Cache-Control':
-              'no-store, max-age=0',
-          },
-        }
-      );
-    }
+    const classified =
+      classifyFlights(demoFlights);
 
     return NextResponse.json(
       {
-        error:
-          'Failed to fetch flight data',
+        commercial_flights:
+          classified.commercial,
+
+        private_flights:
+          classified.privateFlights,
+
+        private_jets:
+          classified.privateJets,
+
+        military_flights:
+          classified.military,
+
+        gps_jamming:
+          classified.gpsJamming,
+
+        total: demoFlights.length,
+
+        source: "demo-fallback",
+
+        providers: {
+          adsbfi_mil: 0,
+          adsbfi_regional: 0,
+          opensky: 0,
+          opensky_auth: false,
+          opensky_age_s: null,
+          demo: demoFlights.length,
+        },
+
+        timestamp:
+          new Date().toISOString(),
       },
       {
-        status: 500,
+        headers: {
+          "Cache-Control":
+            "no-store",
+        },
       }
     );
   }
-}
-
-/* ============================================================
-   GPS JAMMING AGGREGATION
-   ============================================================ */
-
-function aggregateJamming(
-  points: any[],
-  threshold: number
-) {
-
-  if (
-    points.length === 0
-  ) {
-    return [];
-  }
-
-  const grid =
-    new Map<
-      string,
-      {
-        lat: number;
-        lng: number;
-        count: number;
-        total_nac_p: number;
-      }
-    >();
-
-  const GRID_SIZE = 2;
-
-  for (
-    const p of points
-  ) {
-
-    const gLat =
-      Math.floor(
-        p.lat /
-          GRID_SIZE
-      ) *
-      GRID_SIZE;
-
-    const gLng =
-      Math.floor(
-        p.lng /
-          GRID_SIZE
-      ) *
-      GRID_SIZE;
-
-    const key =
-      `${gLat},${gLng}`;
-
-    if (
-      !grid.has(key)
-    ) {
-
-      grid.set(
-        key,
-        {
-          lat:
-            gLat +
-            GRID_SIZE / 2,
-
-          lng:
-            gLng +
-            GRID_SIZE / 2,
-
-          count:
-            0,
-
-          total_nac_p:
-            0,
-        }
-      );
-    }
-
-    const cell =
-      grid.get(key)!;
-
-    cell.count++;
-
-    cell.total_nac_p +=
-      p.nac_p;
-  }
-
-  return Array.from(
-    grid.values()
-  )
-    .filter(
-      z =>
-        z.count >= 3
-    )
-    .map(
-      z => ({
-        lat:
-          z.lat,
-
-        lng:
-          z.lng,
-
-        severity:
-          Math.round(
-            (
-              1 -
-              (
-                z.total_nac_p /
-                z.count
-              ) /
-                threshold
-            ) *
-              100
-          ),
-
-        count:
-          z.count,
-      })
-    );
 }

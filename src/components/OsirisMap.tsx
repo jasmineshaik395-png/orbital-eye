@@ -309,11 +309,21 @@ function OsirisMap({ data, activeLayers, onEntityClick, onMouseCoords, onRightCl
       const flightMil = boot.flightMilitary;
 
       // Create icons — OSIRIS Unified Palette
-      createIcon(map, 'plane-cyan', flightCom, 24);   
-      createIcon(map, 'plane-green', flightPriv, 24);   
-      createIcon(map, 'plane-pink', flightGov, 24);    
-      createIcon(map, 'plane-red', flightMil, 24);     
+      createIcon(map, 'plane-cyan', flightCom, 24);
+      createIcon(map, 'plane-green', flightPriv, 24);
+      createIcon(map, 'plane-pink', flightGov, 24);
+      createIcon(map, 'plane-red', flightMil, 24);
       createIcon(map, 'plane-grey', boot.flightUnknown, 24);
+
+      // Commercial aircraft are coloured by live altitude, matching the
+      // flight-tracker convention: low = orange/yellow, cruise = green/cyan,
+      // high = blue/purple.
+      createIcon(map, 'plane-alt-orange', '#FF6D00', 24);
+      createIcon(map, 'plane-alt-yellow', '#FFD600', 24);
+      createIcon(map, 'plane-alt-green', '#00C853', 24);
+      createIcon(map, 'plane-alt-cyan', '#00E5FF', 24);
+      createIcon(map, 'plane-alt-blue', '#2962FF', 24);
+      createIcon(map, 'plane-alt-purple', '#8A2BE2', 24);
       createDot(map, 'dot-gold', isGhost ? phantomPurple : '#D4AF37', 8);
       createDot(map, 'dot-red', isGhost ? phantomPurple : '#D32F2F', 10);
       createDot(map, 'dot-orange', isGhost ? phantomPurple : '#E65100', 10);
@@ -689,18 +699,36 @@ function OsirisMap({ data, activeLayers, onEntityClick, onMouseCoords, onRightCl
         'text-offset': [0, 2], 'text-max-width': 14, 'text-allow-overlap': false,
       }, paint: { 'text-color': '#D32F2F', 'text-halo-color': '#000', 'text-halo-width': 1.5, 'text-opacity': 0.9 }});
 
-      // Flight layers (WebGL symbol — GPU rendered, handles 50K+ smooth)
+      // Flight layers (WebGL symbol — GPU rendered). Commercial aircraft use
+      // a data-driven icon based on their live altitude.
+      const altitudeIcon: any = [
+        'match',
+        ['get', 'altitude_band'],
+        'orange', 'plane-alt-orange',
+        'yellow', 'plane-alt-yellow',
+        'green', 'plane-alt-green',
+        'cyan', 'plane-alt-cyan',
+        'blue', 'plane-alt-blue',
+        'purple', 'plane-alt-purple',
+        'plane-alt-cyan',
+      ];
+
       const flightLayers = [
-        { id: 'fl-commercial', src: 'flights', icon: 'plane-cyan' },
+        { id: 'fl-commercial', src: 'flights', icon: altitudeIcon },
         { id: 'fl-private', src: 'private-fl', icon: 'plane-green' },
         { id: 'fl-jets', src: 'jets', icon: 'plane-pink' },
         { id: 'fl-military', src: 'military', icon: 'plane-red' },
       ];
       flightLayers.forEach(l => {
         map.addLayer({ id: l.id, type: 'symbol', source: l.src, layout: {
-          'icon-image': l.icon, 'icon-size': ['interpolate',['linear'],['zoom'], 1,0.4, 5,0.7, 10,1],
-          'icon-rotate': ['get','heading'], 'icon-rotation-alignment': 'map', 'icon-allow-overlap': true, 'icon-ignore-placement': true,
-        }, paint: { 'icon-opacity': 0.85 }});
+          'icon-image': l.icon,
+          'icon-size': ['interpolate',['linear'],['zoom'], 1,0.42, 3,0.58, 5,0.75, 8,0.95, 10,1.1, 14,1.25],
+          'icon-rotate': ['get','heading'],
+          'icon-rotation-alignment': 'map',
+          'icon-allow-overlap': true,
+          'icon-ignore-placement': true,
+          'icon-pitch-alignment': 'map',
+        }, paint: { 'icon-opacity': 0.95 }});
       });
 
       // Route layers are added later (after setMapReady) so they render on top of everything.
@@ -1598,21 +1626,59 @@ function OsirisMap({ data, activeLayers, onEntityClick, onMouseCoords, onRightCl
   // Flight data → GeoJSON (GPU rendered)
   useEffect(() => {
     if (!mapReady) return;
-    const toFeatures = (arr: any[], decimate: number = 1) => {
-      let filtered = arr || [];
-      if (decimate > 1) {
-        filtered = filtered.filter((_, i) => i % decimate === 0);
-      }
-      return filtered.map((f: any) => ({
-        type: 'Feature' as const, geometry: { type: 'Point' as const, coordinates: [f.lng, f.lat] },
-        properties: { callsign: f.callsign, heading: f.heading || 0, alt: f.alt, model: f.model, speed_knots: f.speed_knots, registration: f.registration, icao24: f.icao24 },
-      }));
+
+    const altitudeBand = (value: unknown): string => {
+      const alt = Number(value);
+      if (!Number.isFinite(alt)) return 'cyan';
+      if (alt < 2000) return 'orange';
+      if (alt < 5000) return 'yellow';
+      if (alt < 10000) return 'green';
+      if (alt < 20000) return 'cyan';
+      if (alt < 30000) return 'blue';
+      return 'purple';
     };
-    setGeo('flights', activeLayers.flights ? toFeatures(data.commercial_flights, 1) : []);
-    setGeo('private-fl', activeLayers.private ? toFeatures(data.private_flights, 2) : []);
-    setGeo('jets', activeLayers.jets ? toFeatures(data.private_jets, 2) : []);
-    setGeo('military', activeLayers.military ? toFeatures(data.military_flights) : []);
-  }, [mapReady, data.commercial_flights, data.private_flights, data.private_jets, data.military_flights, activeLayers.flights, activeLayers.private, activeLayers.jets, activeLayers.military]);
+
+    const toFeatures = (arr: any[]) => {
+      const flights = Array.isArray(arr) ? arr : [];
+      return flights
+        .filter((f: any) => {
+          const lat = Number(f?.lat);
+          const lng = Number(f?.lng);
+          return Number.isFinite(lat) && Number.isFinite(lng) &&
+            lat >= -90 && lat <= 90 && lng >= -180 && lng <= 180;
+        })
+        .map((f: any) => {
+          const alt = Number(f?.alt);
+          return {
+            type: 'Feature' as const,
+            geometry: {
+              type: 'Point' as const,
+              coordinates: [Number(f.lng), Number(f.lat)],
+            },
+            properties: {
+              callsign: f?.callsign || '',
+              heading: Number(f?.heading) || 0,
+              alt: Number.isFinite(alt) ? alt : 0,
+              altitude_ft: Number.isFinite(alt) ? alt : 0,
+              altitude_band: altitudeBand(alt),
+              model: f?.model || '',
+              speed_knots: Number(f?.speed_knots) || 0,
+              registration: f?.registration || '',
+              icao24: f?.icao24 || '',
+              category: f?.category || '',
+              source: f?.source || data?.source || 'live',
+            },
+          };
+        });
+    };
+
+    // Do not decimate commercial flights: the API response is already a
+    // bounded live dataset and every valid aircraft should be visible.
+    setGeo('flights', activeLayers.flights ? toFeatures(data?.commercial_flights) : []);
+    setGeo('private-fl', activeLayers.private ? toFeatures(data?.private_flights) : []);
+    setGeo('jets', activeLayers.jets ? toFeatures(data?.private_jets) : []);
+    setGeo('military', activeLayers.military ? toFeatures(data?.military_flights) : []);
+  }, [mapReady, data?.commercial_flights, data?.private_flights, data?.private_jets, data?.military_flights, data?.source, activeLayers.flights, activeLayers.private, activeLayers.jets, activeLayers.military]);
 
   /**
    * Pull the palette out of the document whenever it can have changed.

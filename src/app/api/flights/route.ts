@@ -18,11 +18,6 @@ type Flight = {
 };
 
 const AVIATIONSTACK_URL = "https://api.aviationstack.com/v1/flights";
-const OPENSKY_TOKEN_URL =
-  "https://auth.opensky-network.org/auth/realms/opensky-network/protocol/openid-connect/token";
-const OPENSKY_STATES_URL =
-  "https://opensky-network.org/api/states/all?extended=1";
-const INDIA_BBOX = "&lamin=6&lomin=67&lamax=37&lomax=98";
 
 function numberOrZero(value: unknown): number {
   const n = Number(value);
@@ -38,46 +33,60 @@ function knotsFromKmh(value: unknown): number {
   return n > 0 ? Math.round(n * 0.539957) : 0;
 }
 
-/**
- * Aviationstack's live flight records contain the aircraft position in
- * flight.live.  Keep the shape identical to the old OpenSky response so the
- * existing OSIRIS frontend does not need a second data model.
- */
 function aviationstackToFlight(row: any): Flight | null {
   const live = row?.live;
-  const lat = numberOrZero(live?.latitude);
-  const lng = numberOrZero(live?.longitude);
 
-  if (!Number.isFinite(lat) || !Number.isFinite(lng) || (lat === 0 && lng === 0)) {
-    return null;
-  }
+  // A flight can be returned by Aviationstack while its live position is
+  // unavailable. Such a record cannot be placed on a map, so skip it.
+  const lat = Number(live?.latitude);
+  const lng = Number(live?.longitude);
+
+  if (!Number.isFinite(lat) || !Number.isFinite(lng)) return null;
+  if (lat < -90 || lat > 90 || lng < -180 || lng > 180) return null;
 
   const flightNumber =
     row?.flight?.icao || row?.flight?.iata || row?.flight?.number || "";
-  const airline = row?.airline?.icao || row?.airline?.iata || row?.airline?.name || "";
-  const callsign = cleanCallsign(flightNumber || airline);
+  const callsign = cleanCallsign(flightNumber);
 
   return {
-    icao24: String(row?.aircraft?.icao24 ?? row?.aircraft?.registration ?? flightNumber),
+    icao24: String(
+      row?.aircraft?.icao24 ??
+      row?.aircraft?.registration ??
+      row?.flight?.icao ??
+      row?.flight?.iata ??
+      flightNumber
+    ),
     callsign,
     lat,
     lng,
     alt: Math.round(numberOrZero(live?.altitude)),
     speed_knots: knotsFromKmh(live?.speed_horizontal),
     heading: numberOrZero(live?.direction),
-    registration: row?.aircraft?.registration ? String(row.aircraft.registration) : undefined,
-    model: row?.aircraft?.iata || row?.aircraft?.icao || row?.aircraft?.type || undefined,
+    registration: row?.aircraft?.registration
+      ? String(row.aircraft.registration)
+      : undefined,
+    model:
+      row?.aircraft?.iata ||
+      row?.aircraft?.icao ||
+      row?.aircraft?.type ||
+      undefined,
     category: "commercial",
     source: "aviationstack",
   };
 }
 
-async function fetchAviationstack(): Promise<Flight[]> {
-  const key = process.env.AVIATIONSTACK_ACCESS_KEY;
-  if (!key) throw new Error("AVIATIONSTACK_ACCESS_KEY is not configured");
+async function fetchAviationstackPage(
+  key: string,
+  offset: number
+): Promise<{ flights: Flight[]; apiRows: number; total: number }> {
+  const params = new URLSearchParams({
+    access_key: key,
+    flight_status: "active",
+    limit: "100",
+    offset: String(offset),
+  });
 
-  const url = `${AVIATIONSTACK_URL}?access_key=${encodeURIComponent(key)}&flight_status=active`;
-  const response = await fetch(url, {
+  const response = await fetch(`${AVIATIONSTACK_URL}?${params.toString()}`, {
     headers: { Accept: "application/json" },
     cache: "no-store",
   });
@@ -86,129 +95,128 @@ async function fetchAviationstack(): Promise<Flight[]> {
     throw new Error(`Aviationstack returned ${response.status}`);
   }
 
-  const data = await response.json();
-  if (data?.error) {
-    throw new Error(`Aviationstack API error: ${data.error.message ?? "unknown error"}`);
+  const json = await response.json();
+
+  if (json?.error) {
+    throw new Error(
+      `Aviationstack API error: ${json.error.message ?? "unknown error"}`
+    );
   }
 
-  const rows = Array.isArray(data?.data) ? data.data : [];
-  return rows.map(aviationstackToFlight).filter(Boolean) as Flight[];
-}
-
-async function getOpenSkyToken(): Promise<string | null> {
-  const clientId = process.env.OPENSKY_CLIENT_ID;
-  const clientSecret = process.env.OPENSKY_CLIENT_SECRET;
-  if (!clientId || !clientSecret) return null;
-
-  try {
-    const response = await fetch(OPENSKY_TOKEN_URL, {
-      method: "POST",
-      headers: { "Content-Type": "application/x-www-form-urlencoded" },
-      body: new URLSearchParams({
-        grant_type: "client_credentials",
-        client_id: clientId,
-        client_secret: clientSecret,
-      }),
-      cache: "no-store",
-    });
-    if (!response.ok) return null;
-    const data = await response.json();
-    return data.access_token ?? null;
-  } catch {
-    return null;
-  }
-}
-
-function stateToFlight(state: any[]): Flight | null {
-  const icao24 = String(state?.[0] ?? "").trim();
-  const lat = Number(state?.[6]);
-  const lng = Number(state?.[5]);
-  if (!icao24 || !Number.isFinite(lat) || !Number.isFinite(lng)) return null;
-
-  const altitudeMeters = Number(state?.[7]);
-  const speedMs = Number(state?.[9]);
+  const rows = Array.isArray(json?.data) ? json.data : [];
+  const flights = rows
+    .map(aviationstackToFlight)
+    .filter(Boolean) as Flight[];
 
   return {
-    icao24,
-    callsign: cleanCallsign(state?.[1]),
-    lat,
-    lng,
-    alt: Number.isFinite(altitudeMeters) ? Math.round(altitudeMeters * 3.28084) : 0,
-    speed_knots: Number.isFinite(speedMs) ? Math.round(speedMs * 1.94384) : 0,
-    heading: Number.isFinite(Number(state?.[10])) ? Number(state[10]) : 0,
-    category: String(state?.[17] ?? ""),
-    source: "opensky",
+    flights,
+    apiRows: rows.length,
+    total: Number(json?.pagination?.total ?? rows.length),
   };
 }
 
-async function fetchOpenSky(): Promise<Flight[]> {
-  const token = await getOpenSkyToken();
-  const headers: HeadersInit = { Accept: "application/json" };
-  if (token) headers.Authorization = `Bearer ${token}`;
+async function fetchAviationstack(): Promise<{
+  flights: Flight[];
+  apiRows: number;
+  pagesChecked: number;
+  total: number;
+}> {
+  const key = process.env.AVIATIONSTACK_ACCESS_KEY;
 
-  const response = await fetch(OPENSKY_STATES_URL + INDIA_BBOX, {
-    headers,
-    cache: "no-store",
-  });
-  if (!response.ok) throw new Error(`OpenSky returned ${response.status}`);
-
-  const data = await response.json();
-  const states = Array.isArray(data?.states) ? data.states : [];
-  const flights: Flight[] = [];
-
-  for (const state of states) {
-    if (state?.[8] === true) continue;
-    const flight = stateToFlight(state);
-    if (flight) flights.push(flight);
+  if (!key) {
+    throw new Error("AVIATIONSTACK_ACCESS_KEY is not configured");
   }
-  return flights;
-}
 
-function responseFor(flights: Flight[], source: string, error?: string) {
-  // Aviationstack's live endpoint does not provide a trustworthy military/private
-  // classifier. Do not invent one: keep live aircraft in Commercial.
-  const commercial_flights = flights;
+  const allFlights: Flight[] = [];
+  let apiRows = 0;
+  let total = 0;
+  let pagesChecked = 0;
+
+  // Usually the first page is enough. If it contains no live coordinates,
+  // check only two more pages. This avoids making dozens/hundreds of API calls.
+  for (let page = 0; page < 3; page++) {
+    const result = await fetchAviationstackPage(key, page * 100);
+
+    pagesChecked++;
+    apiRows += result.apiRows;
+    total = result.total;
+    allFlights.push(...result.flights);
+
+    // Stop as soon as we have aircraft positions.
+    if (allFlights.length >= 20) break;
+
+    // Nothing more to check.
+    if (result.apiRows < 100) break;
+  }
+
+  // Remove duplicate aircraft records.
+  const unique = Array.from(
+    new Map(allFlights.map((flight) => [flight.icao24, flight])).values()
+  );
+
   return {
-    commercial_flights,
-    private_flights: [] as Flight[],
-    private_jets: [] as Flight[],
-    military_flights: [] as Flight[],
-    gps_jamming: [],
-    total: commercial_flights.length,
-    source,
-    providers: {
-      aviationstack: source === "aviationstack-live" ? flights.length : 0,
-      opensky: source === "opensky-live" ? flights.length : 0,
-      authenticated: Boolean(process.env.AVIATIONSTACK_ACCESS_KEY || (process.env.OPENSKY_CLIENT_ID && process.env.OPENSKY_CLIENT_SECRET)),
-    },
-    timestamp: new Date().toISOString(),
-    ...(error ? { error } : {}),
+    flights: unique,
+    apiRows,
+    pagesChecked,
+    total,
   };
 }
 
 export async function GET() {
   try {
-    // Use Aviationstack when its key is configured. This gives OSIRIS global
-    // real-time flight positions instead of the previous India-only OpenSky box.
-    if (process.env.AVIATIONSTACK_ACCESS_KEY) {
-      try {
-        const flights = await fetchAviationstack();
-        return NextResponse.json(responseFor(flights, "aviationstack-live"), {
-          headers: { "Cache-Control": "no-store, no-cache, must-revalidate" },
-        });
-      } catch (aviationError) {
-        console.error("Aviationstack failed; trying OpenSky fallback:", aviationError);
-      }
-    }
+    const result = await fetchAviationstack();
 
-    const flights = await fetchOpenSky();
-    return NextResponse.json(responseFor(flights, "opensky-live"), {
-      headers: { "Cache-Control": "no-store, no-cache, must-revalidate" },
-    });
-  } catch (error) {
-    console.error("LIVE FLIGHT API ERROR:", error);
     return NextResponse.json(
-      responseFor([], "flight-provider-error", "Live flight provider unavailable"),
+      {
+        commercial_flights: result.flights,
+        private_flights: [],
+        private_jets: [],
+        military_flights: [],
+        gps_jamming: [],
+        total: result.flights.length,
+        source: "aviationstack-live",
+        providers: {
+          aviationstack: result.flights.length,
+          opensky: 0,
+          authenticated: Boolean(process.env.AVIATIONSTACK_ACCESS_KEY),
+        },
+        diagnostics: {
+          api_rows_received: result.apiRows,
+          live_position_rows: result.flights.length,
+          pages_checked: result.pagesChecked,
+          api_total_active: result.total,
+        },
+        timestamp: new Date().toISOString(),
+      },
+      {
+        headers: {
+          "Cache-Control": "no-store, no-cache, must-revalidate",
+        },
+      }
+    );
+  } catch (error) {
+    console.error("AVIATIONSTACK FLIGHT API ERROR:", error);
+
+    return NextResponse.json(
+      {
+        commercial_flights: [],
+        private_flights: [],
+        private_jets: [],
+        military_flights: [],
+        gps_jamming: [],
+        total: 0,
+        source: "aviationstack-error",
+        providers: {
+          aviationstack: 0,
+          opensky: 0,
+          authenticated: Boolean(process.env.AVIATIONSTACK_ACCESS_KEY),
+        },
+        diagnostics: {
+          error:
+            error instanceof Error ? error.message : "Unknown Aviationstack error",
+        },
+        timestamp: new Date().toISOString(),
+      },
       { status: 200, headers: { "Cache-Control": "no-store" } }
     );
   }

@@ -370,14 +370,14 @@ export default function Dashboard() {
     next.private = true;
     next.jets = true;
     next.military = true;
-    next.satellites: true;
-    next.sat_navigation: true;
-    next.sat_earth: true;
-   next.cctv_previews: true;
-    next.live_news: true; 
-    next.earthquakes: true;
-    next.fires: true;
-    next.weather: true;
+    next.satellites = true;
+    next.sat_navigation = true;
+    next.sat_earth = true;
+   next.cctv_previews = true;
+    next.live_news = true; 
+    next.earthquakes = true;
+    next.fires = true;
+    next.weather = true;
     return next;
   });
 }

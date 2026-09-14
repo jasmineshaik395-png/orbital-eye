@@ -161,18 +161,6 @@ export default function Dashboard() {
   const [showIntro, setShowIntro] = useState(true);
   const [showEarthIntelligence, setShowEarthIntelligence] = useState(false);
 
-  // Shared globe selection used by every Earth Intelligence module.
-  const [selectedLocation, setSelectedLocation] = useState<{ lat: number; lng: number } | null>(null);
-
-  const handleGlobeClick = useCallback((coords: { lat: number; lng: number }) => {
-    if (!Number.isFinite(coords.lat) || !Number.isFinite(coords.lng)) return;
-    setSelectedLocation({
-      lat: Math.max(-90, Math.min(90, coords.lat)),
-      lng: Math.max(-180, Math.min(180, coords.lng)),
-    });
-    setShowEarthIntelligence(true);
-  }, []);
-
   // Never let a missing/blocked intro video hide the globe forever.
   useEffect(() => {
     const introFallback = window.setTimeout(() => {
@@ -1162,7 +1150,6 @@ export default function Dashboard() {
           mapStyle={mapStyle === 'satellite' ? 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}' : 'dark'} 
           onEntityClick={handleEntityClick} 
           onMouseCoords={handleMouseCoords} 
-          onGlobeClick={handleGlobeClick}
           onRightClick={handleRightClick} 
           onViewStateChange={setMapView} 
           flyToLocation={flyToLocation}
@@ -2038,34 +2025,21 @@ export default function Dashboard() {
               className="pointer-events-auto mt-2 w-[min(92vw,390px)] max-h-[calc(100vh-120px)] overflow-y-auto styled-scrollbar space-y-2"
             >
               <EarthAnomalyPanel
-                selectedLocation={selectedLocation}
-                selectedRegion={selectedLocation}
-                location={selectedLocation}
-                coords={selectedLocation}
+                lat={mapCenter?.lat}
+                lng={mapCenter?.lng}
+                locationLabel={locationLabel || undefined}
               />
               <RegionAnalysis
-                selectedLocation={selectedLocation}
-                selectedRegion={selectedLocation}
-                location={selectedLocation}
-                coords={selectedLocation}
+                lat={mapCenter?.lat}
+                lng={mapCenter?.lng}
+                locationLabel={locationLabel || undefined}
               />
-              <ChangeTimeline
-                selectedLocation={selectedLocation}
-                selectedRegion={selectedLocation}
-                location={selectedLocation}
-                coords={selectedLocation}
-              />
-              <IntelligenceAlertPanel
-                selectedLocation={selectedLocation}
-                selectedRegion={selectedLocation}
-                location={selectedLocation}
-                coords={selectedLocation}
-              />
+              <ChangeTimeline locationLabel={locationLabel || undefined} />
+              <IntelligenceAlertPanel />
               <EvidencePanel
-                selectedLocation={selectedLocation}
-                selectedRegion={selectedLocation}
-                location={selectedLocation}
-                coords={selectedLocation}
+                lat={mapCenter?.lat}
+                lng={mapCenter?.lng}
+                locationLabel={locationLabel || undefined}
               />
             </motion.div>
           )}

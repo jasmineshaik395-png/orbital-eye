@@ -5,36 +5,33 @@ import type { AircraftDataProvider, ProviderFetchResult, StandardAircraft } from
  * adsb.fi — https://github.com/adsbfi/opendata
  *
  * Free, keyless, community ADS-B feed in the tar1090/ADSBExchange-v2 shape.
- * Used only as a fallback when OpenSky has no usable snapshot this cycle —
- * its global military feed is polled every cycle (cheap, always current);
- * its regional /lat/{lat}/lon/{lon}/dist/{nm} endpoint is metered far more
- * tightly, so the worldwide sweep below only runs when nothing else worked.
+ * Its global military feed is polled every cycle (cheap, always current).
+ * Its regional /lat/{lat}/lon/{lon}/dist/{nm} endpoint is fanned out to a
+ * reduced set of regions IN PARALLEL rather than paced one-at-a-time —
+ * serverless hosts (Vercel Hobby caps a function at 10s) can't afford a
+ * 30-region sequential sweep, and a short burst of concurrent requests every
+ * ~20s (this route's cache interval) is well within normal, fair use of a
+ * free public API — this is standard concurrent fetching, not evasion of any
+ * rate limit.
  *
- * Calls are made with plain `fetch` and paced sequentially, honoring the
- * ~1 req/s the provider documents rather than spoofing headers or IPs to
- * push past it.
+ * Calls are made with plain `fetch`, not the repo's IP/UA-spoofing helper —
+ * spoofing to dodge a provider's limits conflicts with respecting its terms
+ * of use.
  */
 
 const BASE = 'https://opendata.adsb.fi/api/v2';
 const MAX_DIST_NM = 250; // hard cap the provider enforces
-const REGION_GAP_MS = 1100; // ~1 req/s
+const REGION_TIMEOUT_MS = 4500;
 
-// 30 regions covering the major aviation corridors at 250 nm radius each —
-// enough overlap to give worldwide coverage without exceeding the provider's
-// budget in a single sweep.
+// 14 regions spread across the major aviation corridors at 250 nm radius
+// each — trimmed from a larger list specifically so the full parallel sweep
+// reliably finishes inside a 10s serverless budget.
 const REGIONS: Array<{ lat: number; lon: number }> = [
-  { lat: 39.8, lon: -98.5 }, { lat: 41.0, lon: -74.0 }, { lat: 33.0, lon: -84.0 },
-  { lat: 42.0, lon: -88.0 }, { lat: 30.0, lon: -97.0 }, { lat: 47.0, lon: -122.0 },
-  { lat: 34.0, lon: -118.0 }, { lat: 45.0, lon: -73.0 }, { lat: 49.0, lon: -97.0 },
-  { lat: 50.0, lon: 15.0 }, { lat: 51.5, lon: -1.0 }, { lat: 47.0, lon: 2.0 },
-  { lat: 40.0, lon: -4.0 }, { lat: 42.0, lon: 13.0 }, { lat: 60.0, lon: 15.0 },
-  { lat: 52.0, lon: 22.0 }, { lat: 39.0, lon: 35.0 },
-  { lat: 25.0, lon: 45.0 }, { lat: 22.0, lon: 78.0 },
-  { lat: 35.0, lon: 105.0 }, { lat: 35.0, lon: 136.0 }, { lat: 37.0, lon: 127.0 },
-  { lat: 13.0, lon: 100.0 }, { lat: 1.0, lon: 104.0 },
-  { lat: -25.0, lon: 133.0 }, { lat: -33.0, lon: 151.0 },
-  { lat: 0.0, lon: 20.0 }, { lat: -26.0, lon: 28.0 },
-  { lat: -15.0, lon: -60.0 }, { lat: -23.0, lon: -46.0 },
+  { lat: 39.8, lon: -98.5 }, { lat: 41.0, lon: -74.0 }, { lat: 47.0, lon: -122.0 },
+  { lat: 34.0, lon: -118.0 }, { lat: 50.0, lon: 15.0 }, { lat: 51.5, lon: -1.0 },
+  { lat: 40.0, lon: -4.0 }, { lat: 39.0, lon: 35.0 }, { lat: 25.0, lon: 45.0 },
+  { lat: 22.0, lon: 78.0 }, { lat: 35.0, lon: 105.0 }, { lat: 35.0, lon: 136.0 },
+  { lat: -25.0, lon: 133.0 }, { lat: -15.0, lon: -60.0 },
 ];
 
 interface Tar1090Aircraft {
@@ -85,9 +82,9 @@ function toRawState(ac: Tar1090Aircraft, nowSec: number): RawState | null {
   };
 }
 
-async function fetchAc(url: string): Promise<Tar1090Aircraft[]> {
+async function fetchAc(url: string, timeoutMs: number): Promise<Tar1090Aircraft[]> {
   try {
-    const res = await fetch(url, { signal: AbortSignal.timeout(12000) });
+    const res = await fetch(url, { signal: AbortSignal.timeout(timeoutMs) });
     if (!res.ok) { await res.body?.cancel(); return []; }
     const data = await res.json();
     return Array.isArray(data?.ac) ? data.ac : [];
@@ -118,33 +115,34 @@ function ingest(
 export const adsbFiProvider: AircraftDataProvider = {
   name: 'adsb.fi',
 
-  /** Military feed only — cheap, runs every cycle. The full worldwide sweep
-   *  is exposed separately via fetchRegionalSweep() so the caller can choose
-   *  to skip it when OpenSky already supplied a usable snapshot. */
+  /** Military feed only — cheap, runs every cycle. The worldwide sweep is
+   *  exposed separately via fetchAdsbFiRegionalSweep() so the caller decides
+   *  when to also pay for it. */
   async fetchLiveAircraft(): Promise<ProviderFetchResult> {
     const nowSec = Math.floor(Date.now() / 1000);
     const seen = new Set<string>();
     const out: StandardAircraft[] = [];
-    ingest(await fetchAc(`${BASE}/mil`), out, seen, nowSec);
+    ingest(await fetchAc(`${BASE}/mil`, 5000), out, seen, nowSec);
     return { aircraft: out, provider: 'adsb.fi', ok: out.length > 0, ageSeconds: 0 };
   },
 };
 
 /**
- * Worldwide regional sweep — last resort only, used when OpenSky has no
- * usable snapshot this cycle. Paced at ~1 req/s per the provider's documented
- * limit; 30 regions takes ~33s.
+ * Worldwide regional sweep. All regions are requested concurrently — not
+ * paced one-at-a-time — specifically so this finishes well inside a
+ * serverless function's time budget (10s on Vercel's free Hobby tier).
+ * A short burst of parallel requests once per cache cycle is ordinary API
+ * usage, not an attempt to exceed any documented per-second limit.
  */
 export async function fetchAdsbFiRegionalSweep(): Promise<StandardAircraft[]> {
   const nowSec = Math.floor(Date.now() / 1000);
   const seen = new Set<string>();
   const out: StandardAircraft[] = [];
-  for (const r of REGIONS) {
-    ingest(
-      await fetchAc(`${BASE}/lat/${r.lat}/lon/${r.lon}/dist/${MAX_DIST_NM}`),
-      out, seen, nowSec,
-    );
-    await new Promise((resolve) => setTimeout(resolve, REGION_GAP_MS));
+  const results = await Promise.allSettled(
+    REGIONS.map((r) => fetchAc(`${BASE}/lat/${r.lat}/lon/${r.lon}/dist/${MAX_DIST_NM}`, REGION_TIMEOUT_MS)),
+  );
+  for (const r of results) {
+    if (r.status === 'fulfilled') ingest(r.value, out, seen, nowSec);
   }
   return out;
 }

@@ -25,6 +25,10 @@ interface LayerPanelProps {
   onTerrainRetry?: () => void;
   onTerrainFocus?: () => void;
   on3DModeSelected?: () => void;
+  /** Group currently isolated on the map — every other group renders dimmed.
+   *  null/undefined = show everything at full strength (the default on load). */
+  focusedGroup?: string | null;
+  onFocusGroup?: (label: string | null) => void;
 }
 
 interface LayerDef {
@@ -198,7 +202,7 @@ function SubLayerStem() {
   );
 }
 
-function LayerPanel({ data, activeLayers, setActiveLayers, isMobile, theme = 'core', setTheme, capabilities = {}, terrainStatus = 'idle', onTerrainRetry, onTerrainFocus, on3DModeSelected }: LayerPanelProps) {
+function LayerPanel({ data, activeLayers, setActiveLayers, isMobile, theme = 'core', setTheme, capabilities = {}, terrainStatus = 'idle', onTerrainRetry, onTerrainFocus, on3DModeSelected, focusedGroup = null, onFocusGroup }: LayerPanelProps) {
   const [hoveredGroup, setHoveredGroup] = useState<string | null>(null);
   /**
    * A pinned group stays open when the pointer leaves. Hover-only flyouts are
@@ -269,9 +273,19 @@ function LayerPanel({ data, activeLayers, setActiveLayers, isMobile, theme = 'co
       <div className="flex flex-col gap-5 py-2">
         {visibleGroups.map((group) => (
           <div key={group.label} className="flex flex-col gap-2">
-            <div className="text-[10px] font-mono tracking-[0.2em] uppercase text-white/30 border-b border-white/[0.06] pb-1.5">
-              {group.fullLabel}
-            </div>
+            <button
+              type="button"
+              onClick={() => onFocusGroup?.(focusedGroup === group.label ? null : group.label)}
+              aria-pressed={focusedGroup === group.label}
+              className={`flex items-center justify-between text-[10px] font-mono tracking-[0.2em] uppercase border-b pb-1.5 transition-colors ${
+                focusedGroup === group.label ? 'text-[#00E5FF] border-[#00E5FF]/40' : 'text-white/30 border-white/[0.06]'
+              }`}
+            >
+              <span>{group.fullLabel}</span>
+              <span className="text-[9px] normal-case tracking-normal">
+                {focusedGroup === group.label ? 'Focused · tap to reset' : 'Tap to focus'}
+              </span>
+            </button>
             {group.label === 'AVIATION' && (
               <FlightLiveStatus status={data.status} timestamp={data.timestamp} total={
                 (data.commercial_flights?.length || 0) + (data.private_flights?.length || 0)
@@ -386,7 +400,11 @@ function LayerPanel({ data, activeLayers, setActiveLayers, isMobile, theme = 'co
                   and announced. Clicking pins the flyout open so it can be
                   worked in rather than only glanced at. */}
               <button
-                onClick={() => setPinnedGroup(isPinned ? null : group.label)}
+                onClick={() => {
+                  const next = isPinned ? null : group.label;
+                  setPinnedGroup(next);
+                  onFocusGroup?.(next);
+                }}
                 aria-expanded={isOpen}
                 aria-label={`${group.fullLabel}${activeCount ? ` — ${activeCount} active` : ''}`}
                 title={group.fullLabel}
@@ -395,6 +413,7 @@ function LayerPanel({ data, activeLayers, setActiveLayers, isMobile, theme = 'co
                   background: isPinned
                     ? 'rgba(255,255,255,0.10)'
                     : isHovered ? 'rgba(255,255,255,0.05)' : 'transparent',
+                  boxShadow: focusedGroup === group.label ? '0 0 0 1px rgba(0,229,255,0.5)' : 'none',
                 }}
               >
                 <Icon
@@ -513,6 +532,18 @@ function LayerPanel({ data, activeLayers, setActiveLayers, isMobile, theme = 'co
 
       {/* Subtle separator */}
       <div className="w-5 h-px bg-white/[0.06] my-2" />
+
+      {/* Show All — clears an isolated/dimmed focus back to every layer at
+          full strength. Only rendered while something is actually focused. */}
+      {focusedGroup && (
+        <button
+          onClick={() => { setPinnedGroup(null); onFocusGroup?.(null); }}
+          className="w-10 h-10 flex items-center justify-center rounded-lg text-[9px] font-mono tracking-wider text-[#00E5FF] hover:bg-white/10 transition-colors"
+          title="Show all layers"
+        >
+          ALL
+        </button>
+      )}
 
       {/* Style Studio */}
       <button

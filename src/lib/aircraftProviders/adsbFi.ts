@@ -31,8 +31,7 @@ const REGION_TIMEOUT_MS = 3500;
 // inside the route's overall deadline.
 const REGIONS: Array<{ lat: number; lon: number }> = [
   { lat: 39.8, lon: -98.5 }, { lat: 50.0, lon: 15.0 }, { lat: 25.0, lon: 45.0 },
-  { lat: 22.0, lon: 78.0 }, { lat: 35.0, lon: 105.0 }, { lat: 35.0, lon: 136.0 },
-  { lat: -25.0, lon: 133.0 }, { lat: -15.0, lon: -60.0 }, { lat: 51.5, lon: -1.0 },
+  { lat: 22.0, lon: 78.0 }, { lat: 35.0, lon: 105.0 }, { lat: -15.0, lon: -60.0 },
 ];
 
 interface Tar1090Aircraft {
@@ -144,7 +143,7 @@ export const adsbFiProvider: AircraftDataProvider = {
  * provider's limiter.
  */
 const BATCH_SIZE = 3;
-const BATCH_GAP_MS = 300;
+const BATCH_GAP_MS = 700;
 
 export async function fetchAdsbFiRegionalSweep(): Promise<StandardAircraft[]> {
   const nowSec = Math.floor(Date.now() / 1000);

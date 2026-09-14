@@ -198,6 +198,79 @@ export default function Dashboard() {
   const [navProgress, setNavProgress] = useState<NavProgress | null>(null);
   const [watchedFlights, setWatchedFlights] = useState<WatchedFlight[]>([]);
   const [aircraftAirports, setAircraftAirports] = useState<Record<string, Airport[]>>({});
+  const [selectedFlight, setSelectedFlight] = useState<any | null>(null);
+
+  // The map's native aircraft popup calls this global action for DEEP DIVE INTEL.
+  // Capture that flight in React so we can show a richer details panel + QR code.
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const w = window as unknown as {
+      openOsirisIntel?: (payload: any) => void;
+      __orbitalEyePreviousIntel?: (payload: any) => void;
+    };
+    const previous = w.openOsirisIntel;
+    const handler = (payload: any) => {
+      if (payload?.callsign || payload?.icao24) {
+        setSelectedFlight(payload);
+        return;
+      }
+      previous?.(payload);
+    };
+    w.openOsirisIntel = handler;
+    return () => {
+      if (w.openOsirisIntel === handler) w.openOsirisIntel = previous;
+    };
+  }, []);
+
+  // The map currently renders aircraft details in its native MapLibre popup.
+  // Observe that popup and mirror the selected aircraft into React so one tap
+  // on a plane immediately opens our richer Orbital Eye panel.
+  useEffect(() => {
+    if (typeof document === 'undefined') return;
+    const parseFlightPopup = () => {
+      const popup = document.querySelector('.maplibregl-popup-content') as HTMLElement | null;
+      if (!popup) return;
+      const text = popup.innerText || '';
+      if (!/MODEL\s/i.test(text) || !/HDG\s/i.test(text)) return;
+      const lines = text.split('\n').map(v => v.trim()).filter(Boolean);
+      const first = lines[0] || 'UNKNOWN FLIGHT';
+      const icaoMatch = text.match(/MODEL[\s\S]*?([0-9a-f]{6})/i);
+      const modelMatch = text.match(/MODEL\s+([A-Za-z0-9 -]+)/i);
+      const altMatch = text.match(/ALT\s+(\d+)m/i);
+      const speedMatch = text.match(/SPEED\s+(\d+)kt/i);
+      const headingMatch = text.match(/HDG\s+(\d+)°/i);
+      const regMatch = text.match(/REG\s+([A-Za-z0-9._-]+)/i);
+      const posMatch = text.match(/POS\s+(-?\d+(?:\.\d+)?),\s*(-?\d+(?:\.\d+)?)/i);
+      setSelectedFlight((prev: any) => ({
+        ...(prev || {}),
+        callsign: prev?.callsign || first,
+        icao24: prev?.icao24 || icaoMatch?.[1] || '',
+        model: prev?.model || modelMatch?.[1]?.trim() || '',
+        alt: prev?.alt ?? (altMatch ? Number(altMatch[1]) : undefined),
+        speed_knots: prev?.speed_knots ?? (speedMatch ? Number(speedMatch[1]) : undefined),
+        heading: prev?.heading ?? (headingMatch ? Number(headingMatch[1]) : undefined),
+        registration: prev?.registration || regMatch?.[1] || '',
+        lat: prev?.lat ?? (posMatch ? Number(posMatch[1]) : undefined),
+        lng: prev?.lng ?? (posMatch ? Number(posMatch[2]) : undefined),
+      }));
+    };
+    const observer = new MutationObserver(() => parseFlightPopup());
+    observer.observe(document.body, { childList: true, subtree: true });
+    return () => observer.disconnect();
+  }, []);
+
+  // Convert a magnetic-style heading into a human-readable travel direction.
+  const flightDirection = useCallback((heading: number) => {
+    const dirs = ['N', 'NE', 'E', 'SE', 'S', 'SW', 'W', 'NW'];
+    const normalized = ((Number(heading) || 0) + 360) % 360;
+    return dirs[Math.round(normalized / 45) % 8];
+  }, []);
+
+  const flightDirectionName = useCallback((heading: number) => {
+    const names = ['North', 'Northeast', 'East', 'Southeast', 'South', 'Southwest', 'West', 'Northwest'];
+    const normalized = ((Number(heading) || 0) + 360) % 360;
+    return names[Math.round(normalized / 45) % 8];
+  }, []);
 
   // The popup lives in raw map HTML, so it hands aircraft over through a global.
   useEffect(() => {
@@ -224,6 +297,18 @@ export default function Dashboard() {
   }, []);
 
   // Telemetry for watched aircraft, refreshed from whatever the feed last gave us.
+  useEffect(() => {
+    if (!selectedFlight?.icao24) return;
+    const buckets = [data?.commercial_flights, data?.private_flights, data?.private_jets, data?.military_flights];
+    for (const bucket of buckets) {
+      const live = (bucket || []).find((f: any) => f?.icao24 === selectedFlight.icao24);
+      if (live) {
+        setSelectedFlight((prev: any) => prev ? { ...prev, ...live } : live);
+        return;
+      }
+    }
+  }, [data, selectedFlight?.icao24]);
+
   const watchTelemetry = useMemo(() => {
     const out: Record<string, FlightTelemetry> = {};
     if (!watchedFlights.length) return out;
@@ -1143,6 +1228,130 @@ export default function Dashboard() {
         )}
       </div>
 
+
+      {/* ── SELECTED AIRCRAFT DETAILS + QR ── */}
+      <AnimatePresence>
+        {selectedFlight && (
+          <motion.div
+            initial={{ opacity: 0, x: 24, scale: 0.98 }}
+            animate={{ opacity: 1, x: 0, scale: 1 }}
+            exit={{ opacity: 0, x: 24, scale: 0.98 }}
+            className="absolute top-3 right-3 md:right-5 z-[500] w-[min(92vw,360px)] pointer-events-auto"
+          >
+            <div className="rounded-xl border border-[var(--border-primary)] bg-[rgba(8,10,18,0.94)] backdrop-blur-2xl shadow-[0_12px_50px_rgba(0,0,0,0.55)] overflow-hidden">
+              <div className="flex items-center justify-between px-4 py-3 border-b border-white/10">
+                <div>
+                  <div className="text-[9px] font-mono tracking-[0.22em] text-[var(--cyan-primary)]">AIRCRAFT INTELLIGENCE</div>
+                  <div className="mt-1 text-sm font-mono font-bold text-[var(--text-primary)]">{selectedFlight.callsign || 'UNKNOWN FLIGHT'}</div>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setSelectedFlight(null)}
+                  className="p-1.5 rounded-md text-[var(--text-muted)] hover:text-white hover:bg-white/10"
+                  aria-label="Close aircraft details"
+                >
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
+
+              <div className="p-4 space-y-3">
+                <div className="grid grid-cols-2 gap-2 text-[10px] font-mono">
+                  <div className="rounded-lg border border-white/10 bg-white/[0.03] p-2">
+                    <div className="text-[8px] tracking-widest text-[var(--text-muted)]">AIRCRAFT</div>
+                    <div className="mt-1 text-[var(--text-primary)]">{selectedFlight.model || '—'}</div>
+                  </div>
+                  <div className="rounded-lg border border-white/10 bg-white/[0.03] p-2">
+                    <div className="text-[8px] tracking-widest text-[var(--text-muted)]">REGISTRATION</div>
+                    <div className="mt-1 text-[var(--text-primary)] truncate">{selectedFlight.registration || '—'}</div>
+                  </div>
+                  <div className="rounded-lg border border-white/10 bg-white/[0.03] p-2">
+                    <div className="text-[8px] tracking-widest text-[var(--text-muted)]">ALTITUDE</div>
+                    <div className="mt-1 text-[var(--text-primary)]">{selectedFlight.alt != null ? `${Math.round(selectedFlight.alt).toLocaleString()} m` : '—'}</div>
+                  </div>
+                  <div className="rounded-lg border border-white/10 bg-white/[0.03] p-2">
+                    <div className="text-[8px] tracking-widest text-[var(--text-muted)]">SPEED</div>
+                    <div className="mt-1 text-[var(--text-primary)]">{selectedFlight.speed_knots != null ? `${Math.round(selectedFlight.speed_knots)} kt` : '—'}</div>
+                  </div>
+                </div>
+
+                <div className="rounded-lg border border-[var(--cyan-primary)]/30 bg-[var(--cyan-primary)]/[0.06] p-3">
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <div className="text-[8px] tracking-[0.2em] text-[var(--text-muted)]">TRAVEL DIRECTION</div>
+                      <div className="mt-1 text-lg font-mono font-bold text-[var(--cyan-primary)]">
+                        {flightDirection(Number(selectedFlight.heading))} · {flightDirectionName(Number(selectedFlight.heading))}
+                      </div>
+                    </div>
+                    <div
+                      className="text-3xl text-[var(--cyan-primary)] transition-transform"
+                      style={{ transform: `rotate(${Number(selectedFlight.heading) || 0}deg)` }}
+                      aria-label={`Heading ${Math.round(Number(selectedFlight.heading) || 0)} degrees`}
+                    >
+                      ↑
+                    </div>
+                  </div>
+                  <div className="mt-2 text-[9px] font-mono text-[var(--text-secondary)]">
+                    HEADING {Math.round(Number(selectedFlight.heading) || 0)}°
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-2 gap-2 text-[9px] font-mono">
+                  <div><span className="text-[var(--text-muted)]">ICAO24</span><br/><span className="text-[var(--text-secondary)]">{selectedFlight.icao24 || '—'}</span></div>
+                  <div><span className="text-[var(--text-muted)]">SQUAWK</span><br/><span className="text-[var(--text-secondary)]">{selectedFlight.squawk || '—'}</span></div>
+                </div>
+
+                {selectedFlight.destination && (
+                  <div className="rounded-lg border border-white/10 bg-white/[0.03] p-2 font-mono">
+                    <div className="text-[8px] tracking-widest text-[var(--text-muted)]">CURRENT TRAJECTORY / DEMO DESTINATION</div>
+                    <div className="mt-1 text-[10px] text-[var(--text-primary)]">
+                      {Number(selectedFlight.destination.lat).toFixed(2)}°, {Number(selectedFlight.destination.lng).toFixed(2)}°
+                    </div>
+                    <div className="mt-1 text-[8px] text-[var(--text-muted)]">Heading indicates the aircraft's current travel direction; destination is the synthetic route endpoint when available.</div>
+                  </div>
+                )}
+
+                <div className="border-t border-white/10 pt-3">
+                  <div className="flex items-center justify-between mb-2">
+                    <div className="text-[8px] tracking-[0.2em] font-mono text-[var(--text-muted)]">FLIGHT DETAILS QR</div>
+                    <div className="text-[8px] font-mono text-[var(--text-muted)]">SCAN AT EXPO</div>
+                  </div>
+                  <div className="flex gap-3 items-center">
+                    <div className="shrink-0 rounded-lg bg-white p-2">
+                      <img
+                        src={`https://api.qrserver.com/v1/create-qr-code/?size=180x180&data=${encodeURIComponent([
+                          'ORBITAL EYE — AIRCRAFT INTELLIGENCE',
+                          `Callsign: ${selectedFlight.callsign || 'UNKNOWN'}`,
+                          `ICAO24: ${selectedFlight.icao24 || '—'}`,
+                          `Aircraft: ${selectedFlight.model || '—'}`,
+                          `Registration: ${selectedFlight.registration || '—'}`,
+                          `Altitude: ${selectedFlight.alt != null ? `${Math.round(selectedFlight.alt)} m` : '—'}`,
+                          `Speed: ${selectedFlight.speed_knots != null ? `${Math.round(selectedFlight.speed_knots)} kt` : '—'}`,
+                          `Heading: ${Math.round(Number(selectedFlight.heading) || 0)}°`,
+                          `Direction: ${flightDirectionName(Number(selectedFlight.heading))}`,
+                          ...(selectedFlight.destination ? [`Demo destination: ${Number(selectedFlight.destination.lat).toFixed(2)}, ${Number(selectedFlight.destination.lng).toFixed(2)}`] : []),
+                          'Source: Orbital Eye',
+                        ].join('\n'))}`}
+                        alt="QR code containing aircraft flight details"
+                        width={92}
+                        height={92}
+                        className="w-[92px] h-[92px]"
+                      />
+                    </div>
+                    <div className="text-[9px] leading-5 font-mono text-[var(--text-secondary)]">
+                      <div className="text-[var(--text-primary)] font-bold">SCAN TO VIEW</div>
+                      <div>callsign</div>
+                      <div>aircraft type</div>
+                      <div>altitude & speed</div>
+                      <div>heading & direction</div>
+                      <div className="mt-1 text-[var(--text-muted)]">QR service requires internet.</div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
 
       {/* ── FLIGHT WATCH ── */}
       {watchedFlights.length > 0 && (

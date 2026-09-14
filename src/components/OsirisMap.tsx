@@ -34,8 +34,6 @@ interface OsirisMapProps {
   activeLayers: Record<string, boolean>;
   onEntityClick?: (entity: any) => void;
   onMouseCoords?: (coords: { lat: number; lng: number }) => void;
-  /** Fired when the operator clicks any valid point on the globe/map. */
-  onGlobeClick?: (coords: { lat: number; lng: number }) => void;
   onRightClick?: (coords: { lat: number; lng: number }) => void;
   onViewStateChange?: (vs: { zoom: number; latitude: number }) => void;
   flyToLocation?: { lat: number; lng: number; zoom?: number; ts: number } | null;
@@ -83,6 +81,9 @@ interface OsirisMapProps {
   navigating?: boolean;
   /** Corroborated endpoint airports for watched aircraft, keyed by icao24. */
   aircraftAirports?: Record<string, Array<{ icao: string; iata?: string; city?: string; lat: number; lng: number }>>;
+  /** Group currently isolated — every other group's layers render dimmed.
+   *  null/undefined = every group at full strength. */
+  focusedGroup?: string | null;
 }
 
 function computeSolarTerminator(): [number, number][] {
@@ -107,7 +108,62 @@ function computeSolarTerminator(): [number, number][] {
 
 const EMPTY_FC = { type: 'FeatureCollection' as const, features: [] };
 
-function OsirisMap({ data, activeLayers, onEntityClick, onMouseCoords, onGlobeClick, onRightClick, onViewStateChange, flyToLocation, projection = 'globe', terrainEnabled = false, terrainRetry = 0, terrainFocus = 0, onTerrainStatusChange, mapStyle = 'dark', sweepData, scanTargets = [], demoMode = false, theme = 'core', drawnPolygons = [], arcgisLayers = [], drawMode = null, onDrawComplete, onDrawProgress, onDrawCancel, drawCommand = null, onMapCenter, route = null, userLocation = null, followUser = false, onFollowInterrupt, navigating = false, aircraftAirports = {} }: OsirisMapProps) {
+/** LayerPanel group label → the MapLibre layer ids it draws with. Kept in
+ *  sync with LAYER_GROUPS in LayerPanel.tsx — used to dim every group except
+ *  the one the operator has focused. The live 3D satellite layer isn't a
+ *  standard MapLibre paint-driven layer, so SPACE is handled separately
+ *  (see the focus effect below). */
+const GROUP_LAYER_IDS: Record<string, string[]> = {
+  SDK: ['sdk-sea', 'sdk-sea-glow', 'sdk-sea-atmo'],
+  AVIATION: [
+    'fl-commercial', 'fl-commercial-fallback',
+    'fl-private', 'fl-private-fallback',
+    'fl-jets', 'fl-jets-fallback',
+    'fl-military', 'fl-military-fallback',
+  ],
+  MARITIME: [
+    'maritime-glow', 'maritime-dots', 'maritime-label',
+    'choke-glow', 'choke-dots', 'choke-label',
+    'ship-dots', 'ship-label',
+  ],
+  SPACE: ['sat-glow', 'sat-dots'],
+  SURVEIL: [
+    'cctv-glow', 'cctv-dots', 'cctv-label',
+    'news-glow', 'news-dots', 'news-label',
+  ],
+  HAZARD: [
+    'eq-circles', 'eq-label',
+    'fires-heat',
+    'weather-glow', 'weather-dots', 'weather-label',
+  ],
+  THREAT: [
+    'infra-glow', 'infra-dots', 'infra-label',
+    'gdelt-dots', 'gdelt-events-dots',
+  ],
+  NETWORK: [
+    'malware-glow', 'malware-dots', 'malware-label', 'malware-new-ring',
+    'cyber-arcs-atmo', 'cyber-arcs-glow', 'cyber-arcs-core', 'cyber-arcs-flow',
+    'cyber-heads', 'cyber-impacts', 'cyber-labels',
+  ],
+  NETINTEL: [
+    'cf-outage-halo', 'cf-outage-dots', 'cf-outage-label',
+    'cf-attack-dots', 'cf-attack-label',
+  ],
+  DISPLAY: ['day-night-fill'],
+};
+
+const ALL_FOCUSABLE_IDS = Object.values(GROUP_LAYER_IDS).flat();
+
+/** Which paint property carries opacity, keyed by MapLibre layer type. */
+const OPACITY_PAINT_PROPS: Record<string, string[]> = {
+  circle: ['circle-opacity'],
+  line: ['line-opacity'],
+  fill: ['fill-opacity'],
+  symbol: ['icon-opacity', 'text-opacity'],
+  heatmap: ['heatmap-opacity'],
+};
+
+function OsirisMap({ data, activeLayers, onEntityClick, onMouseCoords, onRightClick, onViewStateChange, flyToLocation, projection = 'globe', terrainEnabled = false, terrainRetry = 0, terrainFocus = 0, onTerrainStatusChange, mapStyle = 'dark', sweepData, scanTargets = [], demoMode = false, theme = 'core', drawnPolygons = [], arcgisLayers = [], drawMode = null, onDrawComplete, onDrawProgress, onDrawCancel, drawCommand = null, onMapCenter, route = null, userLocation = null, followUser = false, onFollowInterrupt, navigating = false, aircraftAirports = {}, focusedGroup = null }: OsirisMapProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const mapRef = useRef<maplibregl.Map | null>(null);
   const popupRef = useRef<maplibregl.Popup | null>(null);
@@ -856,15 +912,6 @@ function OsirisMap({ data, activeLayers, onEntityClick, onMouseCoords, onGlobeCl
     });
 
     // Events
-    // A plain map click is the shared Earth-Intelligence selection event.
-    // Layer-specific handlers below still handle their own entity popups.
-    map.on('click', e => {
-      onGlobeClick?.({
-        lat: e.lngLat.lat,
-        lng: e.lngLat.lng,
-      });
-    });
-
     let lastMove = 0;
     map.on('mousemove', e => {
       const now = Date.now();
@@ -1658,6 +1705,31 @@ function OsirisMap({ data, activeLayers, onEntityClick, onMouseCoords, onGlobeCl
     ids.forEach(id => { if (map.getLayer(id)) map.setLayoutProperty(id, 'visibility', visible ? 'visible' : 'none'); });
   }, []);
 
+  /** Original opacity for each layer + paint-prop pair, captured the first
+   *  time it's dimmed so "show all" restores the real value instead of
+   *  snapping everything to a flat 1. */
+  const baseOpacityRef = useRef<Record<string, any>>({});
+
+  const setOpacityFactor = useCallback((ids: string[], factor: number) => {
+    const map = mapRef.current;
+    if (!map) return;
+    ids.forEach(id => {
+      const layer = map.getLayer(id);
+      if (!layer) return;
+      const props = OPACITY_PAINT_PROPS[layer.type as string] || [];
+      props.forEach(prop => {
+        const cacheKey = `${id}:${prop}`;
+        if (!(cacheKey in baseOpacityRef.current)) {
+          const current = map.getPaintProperty(id, prop);
+          baseOpacityRef.current[cacheKey] = current !== undefined ? current : 1;
+        }
+        const base = baseOpacityRef.current[cacheKey];
+        const value = typeof base === 'number' ? base * factor : (['*', base, factor] as any);
+        map.setPaintProperty(id, prop, value);
+      });
+    });
+  }, []);
+
   // Flight data → GeoJSON (GPU rendered)
   useEffect(() => {
     if (!mapReady) return;
@@ -2268,6 +2340,23 @@ function OsirisMap({ data, activeLayers, onEntityClick, onMouseCoords, onGlobeCl
     // Sweep layers always visible when data is present (controlled by useEffect)
     setVis(['sweep-connections','sweep-pulse-ring','sweep-device-glow','sweep-device-dots','sweep-device-labels'], true);
   }, [mapReady, activeLayers, setVis]);
+
+  // Focus / dim — isolates one LayerPanel group visually without touching
+  // the on/off state the toggles above control. null = every group at full
+  // strength (the default). Satellites (SPACE) render through the custom
+  // WebGL layer in satLayerRef, not standard paint properties, so they are
+  // not dimmed here — they stay at full brightness regardless of focus.
+  useEffect(() => {
+    if (!mapReady) return;
+    if (!focusedGroup) {
+      setOpacityFactor(ALL_FOCUSABLE_IDS, 1);
+      return;
+    }
+    const focusedIds = GROUP_LAYER_IDS[focusedGroup] || [];
+    const dimmedIds = ALL_FOCUSABLE_IDS.filter(id => !focusedIds.includes(id));
+    setOpacityFactor(focusedIds, 1);
+    setOpacityFactor(dimmedIds, 0.12);
+  }, [mapReady, focusedGroup, setOpacityFactor]);
 
   // IP Sweep visualization
   useEffect(() => {

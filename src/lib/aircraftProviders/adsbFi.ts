@@ -6,7 +6,7 @@ import type { AircraftDataProvider, ProviderFetchResult, StandardAircraft } from
  *
  * Free, keyless, community ADS-B feed in the tar1090/ADSBExchange-v2 shape.
  * Its global military feed is polled every cycle (cheap, always current).
- * Its regional /lat/{lat}/lon/{lon}/dist/{nm} endpoint is fanned out to a
+ * Its regional /point/{lat}/{lon}/{radius} endpoint is fanned out to a
  * reduced set of regions IN PARALLEL rather than paced one-at-a-time —
  * serverless hosts (Vercel Hobby caps a function at 10s) can't afford a
  * 30-region sequential sweep, and a short burst of concurrent requests every
@@ -85,10 +85,15 @@ function toRawState(ac: Tar1090Aircraft, nowSec: number): RawState | null {
 async function fetchAc(url: string, timeoutMs: number): Promise<Tar1090Aircraft[]> {
   try {
     const res = await fetch(url, { signal: AbortSignal.timeout(timeoutMs) });
-    if (!res.ok) { await res.body?.cancel(); return []; }
+    if (!res.ok) {
+      console.warn('[OSIRIS] adsb.fi', res.status, url);
+      await res.body?.cancel();
+      return [];
+    }
     const data = await res.json();
     return Array.isArray(data?.ac) ? data.ac : [];
-  } catch {
+  } catch (e) {
+    console.warn('[OSIRIS] adsb.fi fetch error:', url, e);
     return [];
   }
 }
@@ -139,7 +144,7 @@ export async function fetchAdsbFiRegionalSweep(): Promise<StandardAircraft[]> {
   const seen = new Set<string>();
   const out: StandardAircraft[] = [];
   const results = await Promise.allSettled(
-    REGIONS.map((r) => fetchAc(`${BASE}/lat/${r.lat}/lon/${r.lon}/dist/${MAX_DIST_NM}`, REGION_TIMEOUT_MS)),
+    REGIONS.map((r) => fetchAc(`${BASE}/point/${r.lat}/${r.lon}/${MAX_DIST_NM}`, REGION_TIMEOUT_MS)),
   );
   for (const r of results) {
     if (r.status === 'fulfilled') ingest(r.value, out, seen, nowSec);

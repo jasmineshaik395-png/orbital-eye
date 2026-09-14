@@ -3,50 +3,82 @@
 import { useEffect, useState } from 'react';
 
 type RegionAnalysisProps = {
-  lat: number;
-  lng: number;
+  lat?: number;
+  lng?: number;
   locationLabel?: string;
 };
 
 type EnvironmentalData = {
-  source: string;
-  isDemo: boolean;
-  coordinates: {
-    lat: number;
-    lng: number;
+  source?: string;
+  isDemo?: boolean;
+  coordinates?: {
+    lat?: number;
+    lng?: number;
   };
-  anomaly: {
-    score: number;
-    status: string;
+  anomaly?: {
+    score?: number;
+    status?: string;
   };
-  indicators: {
-    vegetationChangePercent: number;
-    waterChangePercent: number;
-    surfaceTemperatureChangeCelsius: number;
-    airQualityChangePercent: number;
+  indicators?: {
+    vegetationChangePercent?: number;
+    waterChangePercent?: number;
+    surfaceTemperatureChangeCelsius?: number;
+    airQualityChangePercent?: number;
   };
-  possibleEvent: string;
-  confidence: number;
-  explanation: string;
-  generatedAt: string;
+  possibleEvent?: string;
+  confidence?: number;
+  explanation?: string;
+  generatedAt?: string;
 };
 
 type FloodData = {
-  source: string;
-  isDemo: boolean;
-  flood: {
-    score: number;
-    risk: string;
+  source?: string;
+  isDemo?: boolean;
+  flood?: {
+    score?: number;
+    risk?: string;
   };
-  indicators: {
-    waterExpansionPercent: number;
-    rainfallIntensityPercent: number;
-    drainageStressPercent: number;
+  indicators?: {
+    waterExpansionPercent?: number;
+    rainfallIntensityPercent?: number;
+    drainageStressPercent?: number;
   };
-  possibleEvent: string;
-  confidence: number;
-  explanation: string;
+  possibleEvent?: string;
+  confidence?: number;
+  explanation?: string;
 };
+
+function safeNumber(value: unknown, fallback = 0): number {
+  const number = Number(value);
+
+  return Number.isFinite(number) ? number : fallback;
+}
+
+function formatCoordinate(value: unknown): string {
+  const number = Number(value);
+
+  return Number.isFinite(number) ? number.toFixed(4) : '—';
+}
+
+function formatPercent(value: unknown): string {
+  const number = Number(value);
+
+  if (!Number.isFinite(number)) {
+    return '—';
+  }
+
+  return `${number > 0 ? '+' : ''}${number.toFixed(1)}`;
+}
+
+function formatNumber(value: unknown): string {
+  const number = Number(value);
+
+  if (!Number.isFinite(number)) {
+    return '—';
+  }
+
+  return `${number > 0 ? '+' : ''}${number.toFixed(1)}`;
+}
 
 export default function RegionAnalysis({
   lat,
@@ -56,11 +88,13 @@ export default function RegionAnalysis({
   const [environment, setEnvironment] =
     useState<EnvironmentalData | null>(null);
 
-  const [flood, setFlood] =
-    useState<FloodData | null>(null);
+  const [flood, setFlood] = useState<FloodData | null>(null);
 
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+
+  const hasCoordinates =
+    Number.isFinite(Number(lat)) && Number.isFinite(Number(lng));
 
   useEffect(() => {
     let cancelled = false;
@@ -70,15 +104,25 @@ export default function RegionAnalysis({
         setLoading(true);
         setError(null);
 
-        const query = `lat=${encodeURIComponent(lat)}&lng=${encodeURIComponent(
-          lng
-        )}`;
+        if (!hasCoordinates) {
+          throw new Error(
+            'Select a valid region on the globe to run regional analysis.'
+          );
+        }
+
+        const safeLat = safeNumber(lat);
+        const safeLng = safeNumber(lng);
+
+        const query = `lat=${encodeURIComponent(
+          safeLat
+        )}&lng=${encodeURIComponent(safeLng)}`;
 
         const [environmentResponse, floodResponse] =
           await Promise.all([
             fetch(`/api/environment?${query}`, {
               cache: 'no-store',
             }),
+
             fetch(`/api/flood?${query}`, {
               cache: 'no-store',
             }),
@@ -100,6 +144,9 @@ export default function RegionAnalysis({
         }
       } catch (err) {
         if (!cancelled) {
+          setEnvironment(null);
+          setFlood(null);
+
           setError(
             err instanceof Error
               ? err.message
@@ -118,7 +165,15 @@ export default function RegionAnalysis({
     return () => {
       cancelled = true;
     };
-  }, [lat, lng]);
+  }, [lat, lng, hasCoordinates]);
+
+  const environmentScore = safeNumber(
+    environment?.anomaly?.score
+  );
+
+  const floodScore = safeNumber(flood?.flood?.score);
+
+  const confidence = safeNumber(environment?.confidence);
 
   return (
     <section
@@ -132,7 +187,7 @@ export default function RegionAnalysis({
         backdrop-blur-xl
       "
     >
-      {/* Header */}
+      {/* HEADER */}
       <div className="border-b border-white/10 px-4 py-3">
         <div className="text-[9px] font-mono uppercase tracking-[0.22em] text-white/35">
           ORBITAL EYE / REGIONAL INTELLIGENCE
@@ -147,11 +202,11 @@ export default function RegionAnalysis({
         </div>
 
         <div className="mt-0.5 font-mono text-[8px] text-white/25">
-          {lat.toFixed(4)}° , {lng.toFixed(4)}°
+          {formatCoordinate(lat)}° , {formatCoordinate(lng)}°
         </div>
       </div>
 
-      {/* Loading */}
+      {/* LOADING */}
       {loading && (
         <div className="px-4 py-8 text-center">
           <div className="mx-auto h-7 w-7 animate-spin rounded-full border border-white/10 border-t-white/70" />
@@ -162,24 +217,23 @@ export default function RegionAnalysis({
         </div>
       )}
 
-      {/* Error */}
+      {/* ERROR */}
       {!loading && error && (
         <div className="m-4 rounded border border-red-400/20 bg-red-400/5 p-3">
           <div className="text-[9px] font-mono uppercase tracking-widest text-red-400">
             ANALYSIS ERROR
           </div>
 
-          <div className="mt-1 text-[9px] text-white/50">
+          <div className="mt-1 text-[9px] leading-relaxed text-white/50">
             {error}
           </div>
         </div>
       )}
 
-      {/* Results */}
+      {/* RESULTS */}
       {!loading && !error && environment && flood && (
         <div className="space-y-4 p-4">
-
-          {/* Overall Intelligence */}
+          {/* OVERALL INTELLIGENCE */}
           <div className="rounded-lg border border-white/10 bg-white/[0.03] p-3">
             <div className="flex items-center justify-between">
               <div>
@@ -188,7 +242,7 @@ export default function RegionAnalysis({
                 </div>
 
                 <div className="mt-1 text-sm font-bold">
-                  {environment.anomaly.status}
+                  {environment.anomaly?.status || 'UNKNOWN'}
                 </div>
               </div>
 
@@ -198,7 +252,7 @@ export default function RegionAnalysis({
                 </div>
 
                 <div className="text-2xl font-bold">
-                  {environment.anomaly.score}
+                  {environmentScore.toFixed(0)}
                   <span className="text-xs text-white/25">
                     /100
                   </span>
@@ -207,7 +261,7 @@ export default function RegionAnalysis({
             </div>
           </div>
 
-          {/* Environmental Indicators */}
+          {/* ENVIRONMENTAL INDICATORS */}
           <div>
             <div className="mb-2 text-[8px] font-mono uppercase tracking-widest text-white/30">
               ENVIRONMENTAL INDICATORS
@@ -217,14 +271,14 @@ export default function RegionAnalysis({
               <Indicator
                 label="WATER CHANGE"
                 value={`${formatPercent(
-                  environment.indicators.waterChangePercent
+                  environment.indicators?.waterChangePercent
                 )}%`}
               />
 
               <Indicator
                 label="VEGETATION"
                 value={`${formatPercent(
-                  environment.indicators.vegetationChangePercent
+                  environment.indicators?.vegetationChangePercent
                 )}%`}
               />
 
@@ -232,20 +286,20 @@ export default function RegionAnalysis({
                 label="SURFACE HEAT"
                 value={`${formatNumber(
                   environment.indicators
-                    .surfaceTemperatureChangeCelsius
+                    ?.surfaceTemperatureChangeCelsius
                 )}°C`}
               />
 
               <Indicator
                 label="AIR QUALITY"
                 value={`${formatPercent(
-                  environment.indicators.airQualityChangePercent
+                  environment.indicators?.airQualityChangePercent
                 )}%`}
               />
             </div>
           </div>
 
-          {/* Flood Intelligence */}
+          {/* FLOOD INTELLIGENCE */}
           <div>
             <div className="mb-2 text-[8px] font-mono uppercase tracking-widest text-white/30">
               FLOOD INTELLIGENCE
@@ -258,7 +312,7 @@ export default function RegionAnalysis({
                 </span>
 
                 <span className="text-[10px] font-bold">
-                  {flood.flood.risk}
+                  {flood.flood?.risk || 'UNKNOWN'}
                 </span>
               </div>
 
@@ -268,16 +322,16 @@ export default function RegionAnalysis({
                 </span>
 
                 <span className="font-mono text-[10px] text-white/75">
-                  {flood.flood.score}/100
+                  {floodScore.toFixed(0)}/100
                 </span>
               </div>
 
               <div className="mt-3 h-1 overflow-hidden rounded-full bg-white/10">
                 <div
-                  className="h-full rounded-full bg-white/60"
+                  className="h-full rounded-full bg-white/60 transition-all duration-500"
                   style={{
                     width: `${Math.min(
-                      flood.flood.score,
+                      Math.max(floodScore, 0),
                       100
                     )}%`,
                   }}
@@ -287,23 +341,29 @@ export default function RegionAnalysis({
               <div className="mt-3 grid grid-cols-3 gap-2">
                 <SmallMetric
                   label="WATER"
-                  value={`${flood.indicators.waterExpansionPercent}%`}
+                  value={`${formatPercent(
+                    flood.indicators?.waterExpansionPercent
+                  )}%`}
                 />
 
                 <SmallMetric
                   label="RAIN"
-                  value={`${flood.indicators.rainfallIntensityPercent}%`}
+                  value={`${formatPercent(
+                    flood.indicators?.rainfallIntensityPercent
+                  )}%`}
                 />
 
                 <SmallMetric
                   label="DRAINAGE"
-                  value={`${flood.indicators.drainageStressPercent}%`}
+                  value={`${formatPercent(
+                    flood.indicators?.drainageStressPercent
+                  )}%`}
                 />
               </div>
             </div>
           </div>
 
-          {/* Possible Events */}
+          {/* POSSIBLE EVENTS */}
           <div>
             <div className="mb-2 text-[8px] font-mono uppercase tracking-widest text-white/30">
               POSSIBLE EVENTS
@@ -312,17 +372,23 @@ export default function RegionAnalysis({
             <div className="space-y-2">
               <EventRow
                 label="ENVIRONMENT"
-                value={environment.possibleEvent}
+                value={
+                  environment.possibleEvent ||
+                  'No significant event detected'
+                }
               />
 
               <EventRow
                 label="FLOOD"
-                value={flood.possibleEvent}
+                value={
+                  flood.possibleEvent ||
+                  'No significant flood event detected'
+                }
               />
             </div>
           </div>
 
-          {/* Confidence */}
+          {/* CONFIDENCE */}
           <div className="rounded border border-white/10 bg-white/[0.02] p-3">
             <div className="flex items-center justify-between">
               <span className="text-[8px] font-mono uppercase tracking-widest text-white/30">
@@ -330,36 +396,41 @@ export default function RegionAnalysis({
               </span>
 
               <span className="font-mono text-[9px] text-white/70">
-                {environment.confidence}%
+                {confidence.toFixed(0)}%
               </span>
             </div>
 
             <div className="mt-2 h-1 overflow-hidden rounded-full bg-white/10">
               <div
-                className="h-full rounded-full bg-white/60"
+                className="h-full rounded-full bg-white/60 transition-all duration-500"
                 style={{
-                  width: `${environment.confidence}%`,
+                  width: `${Math.min(
+                    Math.max(confidence, 0),
+                    100
+                  )}%`,
                 }}
               />
             </div>
           </div>
 
-          {/* Explanation */}
+          {/* EXPLANATION */}
           <div>
             <div className="text-[8px] font-mono uppercase tracking-widest text-white/30">
               INTELLIGENCE SUMMARY
             </div>
 
             <p className="mt-1 text-[9px] leading-relaxed text-white/50">
-              {environment.explanation}
+              {environment.explanation ||
+                'No environmental explanation available.'}
             </p>
 
             <p className="mt-2 text-[9px] leading-relaxed text-white/40">
-              {flood.explanation}
+              {flood.explanation ||
+                'No flood explanation available.'}
             </p>
           </div>
 
-          {/* Human Verification */}
+          {/* HUMAN VERIFICATION */}
           <div className="rounded border border-yellow-400/20 bg-yellow-400/5 p-3">
             <div className="text-[8px] font-mono uppercase tracking-widest text-yellow-400/80">
               HUMAN VERIFICATION
@@ -372,7 +443,7 @@ export default function RegionAnalysis({
             </p>
           </div>
 
-          {/* Demo Notice */}
+          {/* DEMO NOTICE */}
           {(environment.isDemo || flood.isDemo) && (
             <div className="border-t border-white/10 pt-3">
               <div className="text-[7px] font-mono uppercase tracking-widest text-yellow-400/70">
@@ -387,7 +458,7 @@ export default function RegionAnalysis({
             </div>
           )}
 
-          {/* Footer */}
+          {/* FOOTER */}
           <div className="flex items-center justify-between border-t border-white/10 pt-3">
             <span className="text-[7px] font-mono uppercase tracking-widest text-white/20">
               ORBITAL EYE
@@ -402,10 +473,6 @@ export default function RegionAnalysis({
     </section>
   );
 }
-
-/* ----------------------------- */
-/* Reusable UI Components        */
-/* ----------------------------- */
 
 function Indicator({
   label,
@@ -465,12 +532,4 @@ function EventRow({
       </span>
     </div>
   );
-}
-
-function formatPercent(value: number) {
-  return `${value > 0 ? '+' : ''}${value}`;
-}
-
-function formatNumber(value: number) {
-  return `${value > 0 ? '+' : ''}${value}`;
 }

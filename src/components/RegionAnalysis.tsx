@@ -169,7 +169,7 @@ export default function RegionAnalysis({
 
         <div className="mt-0.5 font-mono text-[8px] text-white/25">
           {isValidCoordinate(lat, lng)
-            ? `${lat.toFixed(4)}° , ${lng.toFixed(4)}°`
+            ? `${(lat as number).toFixed(4)}° , ${(lng as number).toFixed(4)}°`
             : '—° , —°'}
         </div>
       </div>

@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server';
-import { fetchLiveAircraft, type StandardAircraft } from '@/lib/aircraftProviders';
+import { fetchLiveAircraft, type StandardAircraft, type LiveAircraftResult } from '@/lib/aircraftProviders';
 
 export const maxDuration = 60;
 export const dynamic = 'force-dynamic';
@@ -34,7 +34,10 @@ function toMapFlight(ac: StandardAircraft) {
     callsign: ac.callsign || '',
     lat: ac.latitude,
     lng: ac.longitude,
-    alt: ac.altitude ?? 0,
+    // The map's altitude-band color logic (OsirisMap.tsx) expects feet —
+    // ac.altitude is meters per the standardized object, so convert back
+    // here rather than changing that established display logic.
+    alt: ac.altitude !== null ? Math.round(ac.altitude * 3.28084) : 0,
     heading: ac.heading ?? 0,
     speed_knots: ac.speed ?? 0,
     model: ac.aircraftType || 'Unknown',
@@ -87,8 +90,45 @@ function aggregateJamming(points: Array<{ lat: number; lng: number; nac_p: numbe
     }));
 }
 
+// Hard ceiling on the whole provider fan-out. Vercel's free Hobby plan kills
+// a serverless function at 10s outright (a 504, no JSON, map goes blank) —
+// racing against a shorter internal deadline means this route always
+// returns valid JSON instead, honestly reporting whatever came back in time.
+const FETCH_DEADLINE_MS = 8500;
+
+function withDeadline(): Promise<LiveAircraftResult> {
+  return new Promise((resolve) => {
+    let settled = false;
+    const timer = setTimeout(() => {
+      if (settled) return;
+      settled = true;
+      resolve({
+        aircraft: [], status: 'down', source: 'timeout',
+        providers: { opensky: 0, opensky_authenticated: false, opensky_age_s: null, adsbfi_military: 0, adsbfi_regional: 0 },
+        timestamp: new Date().toISOString(),
+      });
+    }, FETCH_DEADLINE_MS);
+
+    fetchLiveAircraft().then((result) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      resolve(result);
+    }).catch(() => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      resolve({
+        aircraft: [], status: 'down', source: 'error',
+        providers: { opensky: 0, opensky_authenticated: false, opensky_age_s: null, adsbfi_military: 0, adsbfi_regional: 0 },
+        timestamp: new Date().toISOString(),
+      });
+    });
+  });
+}
+
 async function buildResponse() {
-  const result = await fetchLiveAircraft();
+  const result = await withDeadline();
 
   const commercial: ReturnType<typeof toMapFlight>[] = [];
   const privateFl: ReturnType<typeof toMapFlight>[] = [];

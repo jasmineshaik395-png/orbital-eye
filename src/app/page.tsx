@@ -139,7 +139,7 @@ export default function Dashboard() {
   const data = dataRef.current;
 
   const [backendStatus, setBackendStatus] = useState<'connecting' | 'connected' | 'error'>('connecting');
-  const [mapView, setMapView] = useState({ zoom: 2.5, latitude: 20 });
+  const [mapView, setMapView] = useState({ zoom: 1.5, latitude: 20 });
   const [flyToLocation, setFlyToLocation] = useState<{ lat: number; lng: number; zoom?: number; ts: number } | null>(null);
   const [globalStats, setGlobalStats] = useState<any>(null);
   const mouseCoordsRef = useRef<{ lat: number; lng: number } | null>(null);
@@ -404,7 +404,7 @@ export default function Dashboard() {
         .then(geo => {
           if (!autoLocateCancelled.current && !geoController.signal.aborted && geo.status === 'success' &&
               Number.isFinite(geo.lat) && Number.isFinite(geo.lon) && Math.abs(geo.lat) <= 90 && Math.abs(geo.lon) <= 180) {
-            setFlyToLocation({ lat: geo.lat, lng: geo.lon, zoom: 2.5, ts: Date.now() });
+            setFlyToLocation({ lat: geo.lat, lng: geo.lon, zoom: 1.5, ts: Date.now() });
           }
         })
         .catch(() => { /* silent — keep default global view */ });
@@ -452,7 +452,7 @@ export default function Dashboard() {
       if (e.key === 'c') setShowScmPanel(p => !p);
       if (e.key === 'i') setShowIntel(p => !p);
       if (e.key === 's') { setShowDesktopSearch(p => !p); setShowIntel(false); setShowMarkets(false); setShowAlerts(false); setShowSpaceCam(false); }
-      if (e.key === 'r' && !e.ctrlKey && !e.metaKey) setFlyToLocation({ lat: 20, lng: 0, zoom: 2.5, ts: Date.now() });
+      if (e.key === 'r' && !e.ctrlKey && !e.metaKey) setFlyToLocation({ lat: 20, lng: 0, zoom: 1.5, ts: Date.now() });
       if (e.key === 'g') {
         setActiveLayers(prev => ({ ...prev, terrain_elevation: false, terrain_3d: false }));
         setMapProjection(p => p === 'globe' ? 'mercator' : 'globe');

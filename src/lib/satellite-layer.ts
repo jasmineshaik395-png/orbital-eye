@@ -70,6 +70,8 @@ export interface SatPoint {
   color: number;
   /** Point size multiplier — the ISS and other stations read larger. */
   size: number;
+  /** Per-instance opacity used for category focus/dimming; defaults to 1. */
+  opacity?: number;
 }
 
 const VERT = `
@@ -77,11 +79,13 @@ in vec2 a_corner;   // unit quad, -1..1 — one shared quad, drawn per instance
 in vec3 a_pos;      // x, y = mercator [0..1]; z = display elevation (metres)
 in vec3 a_color;
 in float a_size;
+in float a_opacity;
 uniform vec2 u_viewport;
 uniform int u_selected;
 out vec2 v_corner;
 out vec3 v_color;
 out float v_hot;
+out float v_opacity;
 void main() {
   vec4 clip = projectTileFor3D(a_pos.xy, a_pos.z);
   // Shrink with distance so a dense catalogue does not turn the globe into a
@@ -103,6 +107,7 @@ precision mediump float;
 in vec2 v_corner;
 in vec3 v_color;
 in float v_hot;
+in float v_opacity;
 out vec4 fragColor;
 void main() {
   // Round the marker off inside the quad; square satellites read as dead
@@ -114,10 +119,10 @@ void main() {
     // closer satellite, a ring reads as a selection.
     float ring = smoothstep(0.55, 0.75, r) * smoothstep(1.0, 0.85, r);
     vec3 c = mix(v_color, vec3(1.0), 0.55);
-    fragColor = vec4(c, max(ring, smoothstep(0.45, 0.0, r)) * 0.95);
+    fragColor = vec4(c, max(ring, smoothstep(0.45, 0.0, r)) * 0.95 * max(v_opacity, 0.0));
     return;
   }
-  fragColor = vec4(v_color, smoothstep(1.0, 0.55, r));
+  fragColor = vec4(v_color, smoothstep(1.0, 0.55, r) * max(v_opacity, 0.0));
 }`;
 
 /**
@@ -193,10 +198,10 @@ function compile(gl: WebGL2RenderingContext, type: number, src: string): WebGLSh
  * Builds the interleaved vertex buffer for a set of satellites.
  *
  * Exported so the packing is testable without a GL context: this is where an
- * off-by-one silently puts every satellite at the wrong altitude.
+ * off-by-one silently puts every satellite at the wrong altitude or opacity.
  */
 export function packVertices(points: SatPoint[], exaggeration = 1): Float32Array<ArrayBuffer> {
-  const STRIDE = 7; // x, y, z, r, g, b, size
+  const STRIDE = 8; // x, y, z, r, g, b, size, opacity
   const out = new Float32Array(points.length * STRIDE);
   for (let i = 0; i < points.length; i++) {
     const p = points[i];
@@ -209,6 +214,7 @@ export function packVertices(points: SatPoint[], exaggeration = 1): Float32Array
     out[o + 4] = ((p.color >> 8) & 0xff) / 255;
     out[o + 5] = (p.color & 0xff) / 255;
     out[o + 6] = p.size;
+    out[o + 7] = p.opacity ?? 1;
   }
   return out;
 }
@@ -334,8 +340,13 @@ export function createSatelliteLayer(id: string): CustomLayerInterface & {
     gl!.vertexAttribDivisor(cornerLoc, 0);
 
     gl!.bindBuffer(gl!.ARRAY_BUFFER, buffer);
-    const STRIDE = 7 * 4;
-    for (const [name, size, offset] of [['a_pos', 3, 0], ['a_color', 3, 12], ['a_size', 1, 24]] as const) {
+    const STRIDE = 8 * 4;
+    for (const [name, size, offset] of [
+      ['a_pos', 3, 0],
+      ['a_color', 3, 12],
+      ['a_size', 1, 24],
+      ['a_opacity', 1, 28],
+    ] as const) {
       const loc = gl!.getAttribLocation(pr, name);
       if (loc < 0) continue;
       gl!.enableVertexAttribArray(loc);
@@ -348,7 +359,7 @@ export function createSatelliteLayer(id: string): CustomLayerInterface & {
   /** Instancing divisors are global; leaving them set corrupts later layers. */
   const clearDivisors = (pr: WebGLProgram, cornerLoc: number) => {
     gl!.vertexAttribDivisor(cornerLoc, 0);
-    for (const n of ['a_pos', 'a_color', 'a_size']) {
+    for (const n of ['a_pos', 'a_color', 'a_size', 'a_opacity']) {
       const loc = gl!.getAttribLocation(pr, n);
       if (loc >= 0) gl!.vertexAttribDivisor(loc, 0);
     }

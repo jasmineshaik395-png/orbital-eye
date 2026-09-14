@@ -8,6 +8,7 @@ import {
   Flame, Tv, Radio, Mountain, Anchor, Megaphone, SlidersHorizontal
 } from 'lucide-react';
 import StyleStudio from './StyleStudio';
+import FlightLiveStatus from './FlightLiveStatus';
 import { TERRAIN_MIN_ZOOM, type TerrainStatus } from '@/lib/map-terrain';
 
 interface LayerPanelProps {
@@ -271,6 +272,12 @@ function LayerPanel({ data, activeLayers, setActiveLayers, isMobile, theme = 'co
             <div className="text-[10px] font-mono tracking-[0.2em] uppercase text-white/30 border-b border-white/[0.06] pb-1.5">
               {group.fullLabel}
             </div>
+            {group.label === 'AVIATION' && (
+              <FlightLiveStatus status={data.status} timestamp={data.timestamp} total={
+                (data.commercial_flights?.length || 0) + (data.private_flights?.length || 0)
+                + (data.private_jets?.length || 0) + (data.military_flights?.length || 0)
+              } />
+            )}
             <div className="flex flex-col gap-1">
               {group.layers.map((layer) => {
                 const isLayerActive = activeLayers[layer.key];
@@ -459,6 +466,12 @@ function LayerPanel({ data, activeLayers, setActiveLayers, isMobile, theme = 'co
                         </button>
                       )}
                     </div>
+                    {group.label === 'AVIATION' && (
+                      <FlightLiveStatus status={data.status} timestamp={data.timestamp} total={
+                        (data.commercial_flights?.length || 0) + (data.private_flights?.length || 0)
+                        + (data.private_jets?.length || 0) + (data.military_flights?.length || 0)
+                      } />
+                    )}
                     <div className="flex flex-col gap-0.5">
                       {group.layers.map((layer) => {
                         const isLayerActive = activeLayers[layer.key];

@@ -43,7 +43,7 @@ async function getToken(): Promise<string | null> {
       method: 'POST',
       headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
       body: new URLSearchParams({ grant_type: 'client_credentials', client_id: id, client_secret: secret }),
-      signal: AbortSignal.timeout(10000),
+      signal: AbortSignal.timeout(3000),
     });
     if (!res.ok) { console.warn('[OSIRIS] OpenSky token request failed:', res.status); return null; }
     const data = await res.json();
@@ -111,7 +111,7 @@ export const openSkyProvider: AircraftDataProvider = {
     try {
       const authToken = await getToken();
       const res = await fetch(STATES_URL, {
-        signal: AbortSignal.timeout(30000),
+        signal: AbortSignal.timeout(6000),
         headers: authToken ? { Authorization: `Bearer ${authToken}` } : undefined,
       });
 

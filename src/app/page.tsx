@@ -342,6 +342,12 @@ export default function Dashboard() {
   const [liveFeedName, setLiveFeedName] = useState('');
   const [liveFeedEmbedAllowed, setLiveFeedEmbedAllowed] = useState(true);
 
+  // Splash screen
+  useEffect(() => {
+    const splashTimer = setTimeout(() => setShowSplash(false), 2500);
+    return () => clearTimeout(splashTimer);
+  }, []);
+
   // On mount: geolocate by IP and fly to user's city (after splash/map init)
   useEffect(() => {
     if (typeof window === 'undefined') return;
@@ -955,15 +961,16 @@ export default function Dashboard() {
   return (
     <main className="fixed inset-0 w-full h-full bg-[var(--bg-void)] overflow-hidden">
 
-      {/* ── CUSTOM VIDEO INTRO ── */}
+      {/* ── VIDEO INTRO ── */}
       {showIntro && (
-        <div className="absolute inset-0 z-[9999] bg-black">
+        <div className="fixed inset-0 z-[9999] bg-black">
           <video
             autoPlay
             muted
             playsInline
-            className="h-full w-full object-cover"
+            className="absolute inset-0 h-full w-full object-cover"
             onEnded={() => setShowIntro(false)}
+            onError={() => setShowIntro(false)}
           >
             <source src="/intro.mp4" type="video/mp4" />
           </video>
@@ -971,13 +978,12 @@ export default function Dashboard() {
           <button
             type="button"
             onClick={() => setShowIntro(false)}
-            className="absolute bottom-6 right-6 rounded-lg border border-white/30 bg-black/50 px-4 py-2 font-mono text-sm tracking-wider text-white hover:bg-black/70"
+            className="absolute bottom-8 right-8 z-10 rounded-lg border border-white/30 bg-black/60 px-6 py-3 font-mono text-sm tracking-widest text-white"
           >
             SKIP INTRO
           </button>
         </div>
       )}
-
 
 
       {/* ── MAP ── */}

@@ -27,9 +27,11 @@ let lastGoodResult: LiveAircraftResult | null = null;
 
 /**
  * The single entry point the rest of the app calls. Fans out to every
- * provider, merges + dedupes by ICAO24, and only falls back to the slow
- * worldwide adsb.fi sweep when OpenSky produced nothing usable this cycle —
- * that sweep is metered far more tightly than everything else here.
+ * provider CONCURRENTLY — not sequentially — and merges + dedupes by
+ * ICAO24. Running everything in parallel (rather than only sweeping adsb.fi
+ * after waiting to see if OpenSky failed) keeps total latency bounded by the
+ * slowest single provider instead of their sum, which matters on a 10s
+ * serverless function budget.
  *
  * Never invents aircraft: if every provider is down, this returns an empty
  * list with status "down" rather than serving anything stale as if it were
@@ -41,9 +43,10 @@ export async function fetchLiveAircraft(): Promise<LiveAircraftResult> {
     for (const ac of list) if (!merged.has(ac.id)) merged.set(ac.id, ac);
   };
 
-  const [openSkyResult, adsbMilResult] = await Promise.allSettled([
+  const [openSkyResult, adsbMilResult, regionalResult] = await Promise.allSettled([
     openSkyProvider.fetchLiveAircraft(),
     adsbFiProvider.fetchLiveAircraft(),
+    fetchAdsbFiRegionalSweep(),
   ]);
 
   const osOk = openSkyResult.status === 'fulfilled' && openSkyResult.value.ok;
@@ -52,29 +55,16 @@ export async function fetchLiveAircraft(): Promise<LiveAircraftResult> {
     ? openSkyResult.value.ageSeconds : null;
 
   const milAircraft = adsbMilResult.status === 'fulfilled' ? adsbMilResult.value.aircraft : [];
+  const regional = regionalResult.status === 'fulfilled' ? regionalResult.value : [];
 
   addAll(osAircraft);
   addAll(milAircraft);
+  addAll(regional);
 
-  let regionalCount = 0;
   const sourceParts: string[] = [];
   if (osOk) sourceParts.push('opensky');
   if (milAircraft.length > 0) sourceParts.push('adsb.fi-mil');
-
-  // Last resort: OpenSky gave us nothing usable this cycle (rate-limited,
-  // down, or no credentials and mid-cooldown). Sweep adsb.fi worldwide
-  // instead of leaving the map empty. This is slow (~30s) and only runs
-  // when it has to.
-  if (!osOk) {
-    try {
-      const regional = await fetchAdsbFiRegionalSweep();
-      regionalCount = regional.length;
-      addAll(regional);
-      if (regionalCount > 0) sourceParts.push('adsb.fi-regional');
-    } catch (e) {
-      console.warn('[OSIRIS] adsb.fi regional sweep failed:', e);
-    }
-  }
+  if (regional.length > 0) sourceParts.push('adsb.fi-regional');
 
   const aircraft = Array.from(merged.values());
   const providers = {
@@ -82,7 +72,7 @@ export async function fetchLiveAircraft(): Promise<LiveAircraftResult> {
     opensky_authenticated: openSkyHasCredentials(),
     opensky_age_s: osAge,
     adsbfi_military: milAircraft.length,
-    adsbfi_regional: regionalCount,
+    adsbfi_regional: regional.length,
   };
 
   if (aircraft.length > 0) {

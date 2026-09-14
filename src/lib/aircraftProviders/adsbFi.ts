@@ -21,17 +21,18 @@ import type { AircraftDataProvider, ProviderFetchResult, StandardAircraft } from
 
 const BASE = 'https://opendata.adsb.fi/api/v2';
 const MAX_DIST_NM = 250; // hard cap the provider enforces
-const REGION_TIMEOUT_MS = 4500;
+const REGION_TIMEOUT_MS = 3500;
 
 // 14 regions spread across the major aviation corridors at 250 nm radius
 // each — trimmed from a larger list specifically so the full parallel sweep
 // reliably finishes inside a 10s serverless budget.
+// 9 regions — enough spread for real worldwide coverage while keeping the
+// batched sweep (3 per batch, see fetchAdsbFiRegionalSweep) comfortably
+// inside the route's overall deadline.
 const REGIONS: Array<{ lat: number; lon: number }> = [
-  { lat: 39.8, lon: -98.5 }, { lat: 41.0, lon: -74.0 }, { lat: 47.0, lon: -122.0 },
-  { lat: 34.0, lon: -118.0 }, { lat: 50.0, lon: 15.0 }, { lat: 51.5, lon: -1.0 },
-  { lat: 40.0, lon: -4.0 }, { lat: 39.0, lon: 35.0 }, { lat: 25.0, lon: 45.0 },
+  { lat: 39.8, lon: -98.5 }, { lat: 50.0, lon: 15.0 }, { lat: 25.0, lon: 45.0 },
   { lat: 22.0, lon: 78.0 }, { lat: 35.0, lon: 105.0 }, { lat: 35.0, lon: 136.0 },
-  { lat: -25.0, lon: 133.0 }, { lat: -15.0, lon: -60.0 },
+  { lat: -25.0, lon: 133.0 }, { lat: -15.0, lon: -60.0 }, { lat: 51.5, lon: -1.0 },
 ];
 
 interface Tar1090Aircraft {
@@ -122,32 +123,45 @@ export const adsbFiProvider: AircraftDataProvider = {
 
   /** Military feed only — cheap, runs every cycle. The worldwide sweep is
    *  exposed separately via fetchAdsbFiRegionalSweep() so the caller decides
-   *  when to also pay for it. */
+   *  when to also pay for it. Not run concurrently with the regional sweep —
+   *  see the note on fetchAdsbFiRegionalSweep for why. */
   async fetchLiveAircraft(): Promise<ProviderFetchResult> {
     const nowSec = Math.floor(Date.now() / 1000);
     const seen = new Set<string>();
     const out: StandardAircraft[] = [];
-    ingest(await fetchAc(`${BASE}/mil`, 5000), out, seen, nowSec);
+    ingest(await fetchAc(`${BASE}/mil`, 3500), out, seen, nowSec);
     return { aircraft: out, provider: 'adsb.fi', ok: out.length > 0, ageSeconds: 0 };
   },
 };
 
 /**
- * Worldwide regional sweep. All regions are requested concurrently — not
- * paced one-at-a-time — specifically so this finishes well inside a
- * serverless function's time budget (10s on Vercel's free Hobby tier).
- * A short burst of parallel requests once per cache cycle is ordinary API
- * usage, not an attempt to exceed any documented per-second limit.
+ * Worldwide regional sweep, in small concurrent batches rather than one
+ * simultaneous burst. Firing all regions (plus the military feed) in the
+ * same instant tripped adsb.fi's rate limiter and produced 429s across the
+ * board — including on the otherwise-reliable /mil call once it landed in
+ * the same burst. Batches of 3 with a short gap between them stay well
+ * under a 10s serverless budget while not looking like a burst to the
+ * provider's limiter.
  */
+const BATCH_SIZE = 3;
+const BATCH_GAP_MS = 300;
+
 export async function fetchAdsbFiRegionalSweep(): Promise<StandardAircraft[]> {
   const nowSec = Math.floor(Date.now() / 1000);
   const seen = new Set<string>();
   const out: StandardAircraft[] = [];
-  const results = await Promise.allSettled(
-    REGIONS.map((r) => fetchAc(`${BASE}/point/${r.lat}/${r.lon}/${MAX_DIST_NM}`, REGION_TIMEOUT_MS)),
-  );
-  for (const r of results) {
-    if (r.status === 'fulfilled') ingest(r.value, out, seen, nowSec);
+
+  for (let i = 0; i < REGIONS.length; i += BATCH_SIZE) {
+    const batch = REGIONS.slice(i, i + BATCH_SIZE);
+    const results = await Promise.allSettled(
+      batch.map((r) => fetchAc(`${BASE}/point/${r.lat}/${r.lon}/${MAX_DIST_NM}`, REGION_TIMEOUT_MS)),
+    );
+    for (const r of results) {
+      if (r.status === 'fulfilled') ingest(r.value, out, seen, nowSec);
+    }
+    if (i + BATCH_SIZE < REGIONS.length) {
+      await new Promise((resolve) => setTimeout(resolve, BATCH_GAP_MS));
+    }
   }
   return out;
 }

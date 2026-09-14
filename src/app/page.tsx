@@ -952,6 +952,18 @@ export default function Dashboard() {
   ), [data.commercial_flights, data.private_flights, data.private_jets, data.military_flights]);
 
 
+  const toggleFullscreen = async () => {
+    try {
+      if (document.fullscreenElement) {
+        await document.exitFullscreen();
+      } else if (document.documentElement.requestFullscreen) {
+        await document.documentElement.requestFullscreen();
+      }
+    } catch (error) {
+      console.warn('[OSIRIS] Fullscreen request was blocked:', error);
+    }
+  };
+
   return (
     <main className="fixed inset-0 w-full h-full bg-[var(--bg-void)] overflow-hidden">
 
@@ -1741,6 +1753,17 @@ export default function Dashboard() {
 
       {/* ── GLOBAL STATUS TICKER (bottom) ── */}
       <GlobalStatusBar />
+
+      {/* Fullscreen control — must be clicked to satisfy browser fullscreen permissions */}
+      <button
+        type="button"
+        onClick={toggleFullscreen}
+        aria-label={isFullscreen ? 'Exit fullscreen' : 'Enter fullscreen'}
+        title={isFullscreen ? 'Exit fullscreen' : 'Enter fullscreen'}
+        className="desktop-only absolute top-4 right-4 z-[500] h-9 w-9 rounded-full border border-[var(--gold-primary)]/40 bg-black/60 text-[var(--gold-primary)] text-xl leading-none hover:bg-[var(--gold-primary)]/15 focus:outline-none focus:ring-2 focus:ring-[var(--gold-primary)]"
+      >
+        {isFullscreen ? '⤢' : '⛶'}
+      </button>
 
       {/* Shortcut hint — more visible */}
       <div className="desktop-only absolute bottom-[26px] right-5 z-[200] pointer-events-none text-[9px] font-mono text-[var(--text-muted)] opacity-50 tracking-widest" title="Press ? to see all keyboard shortcuts">

@@ -1720,12 +1720,12 @@ function OsirisMap({ data, activeLayers, onEntityClick, onMouseCoords, onRightCl
       props.forEach(prop => {
         const cacheKey = `${id}:${prop}`;
         if (!(cacheKey in baseOpacityRef.current)) {
-          const current = map.getPaintProperty(id, prop);
+          const current = map.getPaintProperty(id, prop as any);
           baseOpacityRef.current[cacheKey] = current !== undefined ? current : 1;
         }
         const base = baseOpacityRef.current[cacheKey];
         const value = typeof base === 'number' ? base * factor : (['*', base, factor] as any);
-        map.setPaintProperty(id, prop, value);
+        map.setPaintProperty(id, prop as any, value);
       });
     });
   }, []);

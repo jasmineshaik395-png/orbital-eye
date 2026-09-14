@@ -24,6 +24,8 @@ export type SyntheticFlight = {
   country: string;
   aircraftType: string;
   lastUpdated: string;
+  origin: { lat: number; lng: number };
+  destination: { lat: number; lng: number };
 };
 
 const AIRPORTS = [
@@ -62,6 +64,8 @@ function makeFlight(i: number, category: SyntheticFlight['category'], now: numbe
     source: 'SYNTHETIC DEMO', type: 'flight', id,
     verticalRate: Math.round((curve - 0.5) * 400), country: 'DEMO',
     lastUpdated: new Date(now).toISOString(),
+    origin: { lat: a[0], lng: a[1] },
+    destination: { lat: b[0], lng: b[1] },
   };
 }
 

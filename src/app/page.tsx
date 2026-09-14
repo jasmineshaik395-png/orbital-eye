@@ -33,6 +33,16 @@ const CameraViewer = dynamic(() => import('@/components/CameraViewer'));
 const OsintPanel = dynamic(() => import('@/components/OsintPanel'));
 const DrawingToolbar = dynamic(() => import('@/components/DrawingToolbar'), { ssr: false });
 const DrawHud = dynamic(() => import('@/components/DrawHud'), { ssr: false });
+
+// Earth Intelligence modules — loaded lazily so the main globe remains fast.
+// Cast to any so these panels can evolve independently without forcing page.tsx
+// to know their internal prop contracts.
+const EarthAnomalyPanel: any = dynamic(() => import('@/components/EarthAnomalyPanel'));
+const RegionAnalysis: any = dynamic(() => import('@/components/RegionAnalysis'));
+const ChangeTimeline: any = dynamic(() => import('@/components/ChangeTimeline'));
+const IntelligenceAlertPanel: any = dynamic(() => import('@/components/AlertPanel'));
+const EvidencePanel: any = dynamic(() => import('@/components/EvidencePanel'));
+
 // The measurement helpers are pure functions — importing them directly keeps
 // them out of the lazy chunk, so a finished polygon can be measured whether or
 // not the toolbar has loaded yet.
@@ -149,6 +159,7 @@ export default function Dashboard() {
   const [regionDossier, setRegionDossier] = useState<any>(null);
   const [dossierLoading, setDossierLoading] = useState(false);
   const [showIntro, setShowIntro] = useState(true);
+  const [showEarthIntelligence, setShowEarthIntelligence] = useState(false);
 
   // Never let a missing/blocked intro video hide the globe forever.
   useEffect(() => {
@@ -1990,6 +2001,38 @@ export default function Dashboard() {
           <div className={`absolute ${c.vAnchor} ${c.hAnchor} w-[1px] h-full ${c.vGrad} from-[var(--gold-primary)]/30 to-transparent`} />
         </div>
       ))}
+
+      {/* ── EARTH INTELLIGENCE ── */}
+      <div className="absolute right-4 top-[76px] z-[460] pointer-events-none">
+        <button
+          type="button"
+          onClick={() => setShowEarthIntelligence(v => !v)}
+          className="pointer-events-auto flex items-center gap-2 rounded-lg border border-[var(--gold-primary)]/40 bg-black/70 px-3 py-2 text-[10px] font-mono tracking-widest text-[var(--gold-primary)] backdrop-blur-xl shadow-lg hover:bg-[var(--gold-primary)]/10 transition-colors"
+          aria-expanded={showEarthIntelligence}
+          title="Open Earth intelligence analysis"
+        >
+          <span className="h-1.5 w-1.5 rounded-full bg-[var(--gold-primary)] shadow-[0_0_8px_var(--gold-primary)]" />
+          EARTH INTEL
+        </button>
+
+        <AnimatePresence>
+          {showEarthIntelligence && (
+            <motion.div
+              initial={{ opacity: 0, y: -8, scale: 0.98 }}
+              animate={{ opacity: 1, y: 0, scale: 1 }}
+              exit={{ opacity: 0, y: -8, scale: 0.98 }}
+              transition={{ duration: 0.18 }}
+              className="pointer-events-auto mt-2 w-[min(92vw,390px)] max-h-[calc(100vh-120px)] overflow-y-auto styled-scrollbar space-y-2"
+            >
+              <EarthAnomalyPanel />
+              <RegionAnalysis />
+              <ChangeTimeline />
+              <IntelligenceAlertPanel />
+              <EvidencePanel />
+            </motion.div>
+          )}
+        </AnimatePresence>
+      </div>
 
       {/* Keyboard Shortcuts Overlay */}
       <KeyboardShortcuts />

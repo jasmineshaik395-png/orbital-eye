@@ -248,7 +248,7 @@ function OsirisMap({ data, activeLayers, onEntityClick, onMouseCoords, onRightCl
     const baseOptions = {
       container,
       style: styleUrl,
-      center: [25.48, 42.70] as [number, number], zoom: 6.5, minZoom: 1.5, maxZoom: 18,
+      center: [25.48, 42.70] as [number, number], zoom: 2.8, minZoom: 0.5, maxZoom: 18,
       attributionControl: false as const,
       maxPitch: 85,
       transformRequest: (url: string) => {

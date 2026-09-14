@@ -3,30 +3,30 @@
 import { useEffect, useState } from 'react';
 
 type AnomalyData = {
-  source: string;
-  isDemo: boolean;
-  coordinates: {
-    lat: number;
-    lng: number;
+  source?: string;
+  isDemo?: boolean;
+  coordinates?: {
+    lat?: number;
+    lng?: number;
   };
-  anomaly: {
-    score: number;
-    status: 'NORMAL' | 'WATCH' | 'ANOMALY' | 'CRITICAL';
+  anomaly?: {
+    score?: number;
+    status?: 'NORMAL' | 'WATCH' | 'ANOMALY' | 'CRITICAL';
   };
-  metrics: {
-    waterChangePercent: number;
-    vegetationChangePercent: number;
-    heatChangeCelsius: number;
+  metrics?: {
+    waterChangePercent?: number;
+    vegetationChangePercent?: number;
+    heatChangeCelsius?: number;
   };
-  possibleEvent: string;
-  confidence: number;
-  explanation: string;
-  generatedAt: string;
+  possibleEvent?: string;
+  confidence?: number;
+  explanation?: string;
+  generatedAt?: string;
 };
 
 type EarthAnomalyPanelProps = {
-  lat: number;
-  lng: number;
+  lat?: number;
+  lng?: number;
   locationLabel?: string;
 };
 
@@ -59,7 +59,39 @@ const statusConfig = {
     text: 'text-red-400',
     bg: 'bg-red-400/10',
   },
-};
+} as const;
+
+function safeNumber(value: unknown, fallback = 0): number {
+  const number = Number(value);
+
+  return Number.isFinite(number) ? number : fallback;
+}
+
+function formatCoordinate(value: unknown): string {
+  const number = Number(value);
+
+  return Number.isFinite(number) ? number.toFixed(4) : '—';
+}
+
+function formatValue(value: unknown, decimals = 1): string {
+  const number = Number(value);
+
+  if (!Number.isFinite(number)) {
+    return '—';
+  }
+
+  return number.toFixed(decimals);
+}
+
+function formatSigned(value: unknown, decimals = 1): string {
+  const number = Number(value);
+
+  if (!Number.isFinite(number)) {
+    return '—';
+  }
+
+  return `${number > 0 ? '+' : ''}${number.toFixed(decimals)}`;
+}
 
 export default function EarthAnomalyPanel({
   lat,
@@ -70,6 +102,9 @@ export default function EarthAnomalyPanel({
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
+  const hasCoordinates =
+    Number.isFinite(Number(lat)) && Number.isFinite(Number(lng));
+
   useEffect(() => {
     let cancelled = false;
 
@@ -78,8 +113,19 @@ export default function EarthAnomalyPanel({
         setLoading(true);
         setError(null);
 
+        if (!hasCoordinates) {
+          throw new Error(
+            'Select a valid region on the globe to run anomaly analysis.'
+          );
+        }
+
+        const safeLat = safeNumber(lat);
+        const safeLng = safeNumber(lng);
+
         const response = await fetch(
-          `/api/anomaly?lat=${encodeURIComponent(lat)}&lng=${encodeURIComponent(lng)}`,
+          `/api/anomaly?lat=${encodeURIComponent(
+            safeLat
+          )}&lng=${encodeURIComponent(safeLng)}`,
           {
             cache: 'no-store',
           }
@@ -96,6 +142,8 @@ export default function EarthAnomalyPanel({
         }
       } catch (err) {
         if (!cancelled) {
+          setData(null);
+
           setError(
             err instanceof Error
               ? err.message
@@ -114,10 +162,15 @@ export default function EarthAnomalyPanel({
     return () => {
       cancelled = true;
     };
-  }, [lat, lng]);
+  }, [lat, lng, hasCoordinates]);
 
-  const status = data?.anomaly.status ?? 'NORMAL';
-  const config = statusConfig[status];
+  const status = data?.anomaly?.status ?? 'NORMAL';
+  const config =
+    statusConfig[status as keyof typeof statusConfig] ??
+    statusConfig.NORMAL;
+
+  const score = safeNumber(data?.anomaly?.score);
+  const confidence = safeNumber(data?.confidence);
 
   return (
     <section
@@ -131,7 +184,7 @@ export default function EarthAnomalyPanel({
         backdrop-blur-xl
       "
     >
-      {/* Header */}
+      {/* HEADER */}
       <div className="border-b border-white/10 px-4 py-3">
         <div className="flex items-center justify-between">
           <div>
@@ -147,18 +200,22 @@ export default function EarthAnomalyPanel({
           <div className="flex items-center gap-1.5">
             <span
               className={`h-1.5 w-1.5 rounded-full ${
-                loading ? 'animate-pulse bg-yellow-400' : 'bg-emerald-400'
+                loading
+                  ? 'animate-pulse bg-yellow-400'
+                  : error
+                    ? 'bg-red-400'
+                    : 'bg-emerald-400'
               }`}
             />
 
             <span className="text-[8px] font-mono uppercase tracking-widest text-white/40">
-              {loading ? 'ANALYZING' : 'ONLINE'}
+              {loading ? 'ANALYZING' : error ? 'ERROR' : 'ONLINE'}
             </span>
           </div>
         </div>
       </div>
 
-      {/* Location */}
+      {/* LOCATION */}
       <div className="border-b border-white/10 px-4 py-3">
         <div className="text-[8px] font-mono uppercase tracking-[0.18em] text-white/35">
           SELECTED REGION
@@ -169,11 +226,11 @@ export default function EarthAnomalyPanel({
         </div>
 
         <div className="mt-1 font-mono text-[9px] text-white/35">
-          {lat.toFixed(4)}° , {lng.toFixed(4)}°
+          {formatCoordinate(lat)}° , {formatCoordinate(lng)}°
         </div>
       </div>
 
-      {/* Loading */}
+      {/* LOADING */}
       {loading && (
         <div className="px-4 py-8 text-center">
           <div className="mx-auto h-7 w-7 animate-spin rounded-full border border-white/10 border-t-white/70" />
@@ -184,23 +241,23 @@ export default function EarthAnomalyPanel({
         </div>
       )}
 
-      {/* Error */}
+      {/* ERROR */}
       {!loading && error && (
         <div className="m-4 rounded border border-red-400/20 bg-red-400/5 p-3">
           <div className="text-[9px] font-mono uppercase tracking-widest text-red-400">
-            Analysis Error
+            ANALYSIS ERROR
           </div>
 
-          <div className="mt-1 text-[10px] text-white/50">
+          <div className="mt-1 text-[10px] leading-relaxed text-white/50">
             {error}
           </div>
         </div>
       )}
 
-      {/* Results */}
-      {!loading && data && (
+      {/* RESULTS */}
+      {!loading && !error && data && (
         <>
-          {/* Status */}
+          {/* STATUS */}
           <div className="px-4 pt-4">
             <div
               className={`rounded-lg border ${config.border} ${config.bg} p-3`}
@@ -225,7 +282,7 @@ export default function EarthAnomalyPanel({
                   </div>
 
                   <div className={`text-2xl font-bold ${config.text}`}>
-                    {data.anomaly.score}
+                    {formatValue(score, 0)}
                     <span className="text-xs text-white/25">/100</span>
                   </div>
                 </div>
@@ -233,7 +290,7 @@ export default function EarthAnomalyPanel({
             </div>
           </div>
 
-          {/* Metrics */}
+          {/* METRICS */}
           <div className="px-4 pt-4">
             <div className="mb-2 text-[8px] font-mono uppercase tracking-[0.2em] text-white/35">
               ENVIRONMENTAL SIGNALS
@@ -242,22 +299,28 @@ export default function EarthAnomalyPanel({
             <div className="grid grid-cols-3 gap-2">
               <Metric
                 label="WATER"
-                value={`${data.metrics.waterChangePercent > 0 ? '+' : ''}${data.metrics.waterChangePercent}%`}
+                value={formatSigned(
+                  data.metrics?.waterChangePercent
+                )}
               />
 
               <Metric
                 label="VEGETATION"
-                value={`${data.metrics.vegetationChangePercent > 0 ? '+' : ''}${data.metrics.vegetationChangePercent}%`}
+                value={formatSigned(
+                  data.metrics?.vegetationChangePercent
+                )}
               />
 
               <Metric
                 label="HEAT"
-                value={`${data.metrics.heatChangeCelsius > 0 ? '+' : ''}${data.metrics.heatChangeCelsius}°C`}
+                value={`${formatSigned(
+                  data.metrics?.heatChangeCelsius
+                )}°C`}
               />
             </div>
           </div>
 
-          {/* Possible event */}
+          {/* POSSIBLE EVENT */}
           <div className="px-4 pt-4">
             <div className="rounded border border-white/10 bg-white/[0.03] p-3">
               <div className="text-[8px] font-mono uppercase tracking-[0.18em] text-white/35">
@@ -265,12 +328,12 @@ export default function EarthAnomalyPanel({
               </div>
 
               <div className="mt-1 text-[10px] font-medium leading-relaxed text-white/80">
-                {data.possibleEvent}
+                {data.possibleEvent || 'No significant event detected'}
               </div>
             </div>
           </div>
 
-          {/* Confidence */}
+          {/* CONFIDENCE */}
           <div className="px-4 pt-4">
             <div className="flex items-center justify-between">
               <span className="text-[8px] font-mono uppercase tracking-widest text-white/35">
@@ -278,7 +341,7 @@ export default function EarthAnomalyPanel({
               </span>
 
               <span className="font-mono text-[9px] text-white/70">
-                {data.confidence}%
+                {formatValue(confidence, 0)}%
               </span>
             </div>
 
@@ -286,24 +349,24 @@ export default function EarthAnomalyPanel({
               <div
                 className="h-full rounded-full bg-white/60 transition-all duration-500"
                 style={{
-                  width: `${data.confidence}%`,
+                  width: `${Math.min(Math.max(confidence, 0), 100)}%`,
                 }}
               />
             </div>
           </div>
 
-          {/* Explanation */}
+          {/* EXPLANATION */}
           <div className="px-4 pt-4">
             <div className="text-[8px] font-mono uppercase tracking-[0.18em] text-white/35">
               WHY THIS ALERT?
             </div>
 
             <p className="mt-1 text-[10px] leading-relaxed text-white/55">
-              {data.explanation}
+              {data.explanation || 'No additional explanation available.'}
             </p>
           </div>
 
-          {/* Demo warning */}
+          {/* DEMO WARNING */}
           {data.isDemo && (
             <div className="mx-4 mt-4 rounded border border-yellow-400/20 bg-yellow-400/5 px-3 py-2">
               <div className="text-[8px] font-mono uppercase tracking-widest text-yellow-400/80">
@@ -318,7 +381,7 @@ export default function EarthAnomalyPanel({
             </div>
           )}
 
-          {/* Source */}
+          {/* SOURCE */}
           <div className="mt-4 border-t border-white/10 px-4 py-3">
             <div className="flex items-center justify-between gap-3">
               <div>
@@ -327,7 +390,7 @@ export default function EarthAnomalyPanel({
                 </div>
 
                 <div className="mt-0.5 text-[8px] text-white/40">
-                  {data.source}
+                  {data.source || 'Orbital Eye Intelligence Engine'}
                 </div>
               </div>
 
@@ -337,7 +400,9 @@ export default function EarthAnomalyPanel({
                 </div>
 
                 <div className="mt-0.5 font-mono text-[8px] text-white/40">
-                  {new Date(data.generatedAt).toLocaleTimeString()}
+                  {data.generatedAt
+                    ? new Date(data.generatedAt).toLocaleTimeString()
+                    : '—'}
                 </div>
               </div>
             </div>

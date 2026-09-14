@@ -192,7 +192,7 @@ export default function EarthAnomalyPanel({
 
         <div className="mt-1 font-mono text-[9px] text-white/35">
           {isValidCoordinate(lat, lng)
-            ? `${lat.toFixed(4)}° , ${lng.toFixed(4)}°`
+            ? `${(lat as number).toFixed(4)}° , ${(lng as number).toFixed(4)}°`
             : '—° , —°'}
         </div>
       </div>

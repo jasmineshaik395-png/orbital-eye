@@ -21,8 +21,8 @@ type EvidenceItem = {
   confidence: number;
   description: string;
   coordinates?: {
-    lat: number;
-    lng: number;
+    lat?: number;
+    lng?: number;
   };
 };
 
@@ -154,6 +154,28 @@ const statusStyles = {
   PROTOTYPE: 'border-yellow-400/20 text-yellow-400',
 };
 
+function safeCoordinate(value: unknown): number | null {
+  const number = Number(value);
+
+  return Number.isFinite(number) ? number : null;
+}
+
+function formatCoordinate(value: unknown): string {
+  const number = safeCoordinate(value);
+
+  return number === null ? '—' : number.toFixed(4);
+}
+
+function formatConfidence(value: unknown): string {
+  const number = Number(value);
+
+  if (!Number.isFinite(number)) {
+    return '—';
+  }
+
+  return `${Math.min(Math.max(number, 0), 100).toFixed(0)}%`;
+}
+
 export default function EvidencePanel({
   locationLabel,
   lat,
@@ -166,19 +188,31 @@ export default function EvidencePanel({
     useState<EvidenceItem | null>(null);
 
   const evidence = useMemo(() => {
-    const currentLocation = locationLabel || 'Selected Region';
+    const currentLocation =
+      locationLabel || 'Selected Region';
+
+    const safeLat = safeCoordinate(lat);
+    const safeLng = safeCoordinate(lng);
 
     return demoEvidence
       .filter((item) => {
-        if (selectedType === 'ALL') return true;
+        if (selectedType === 'ALL') {
+          return true;
+        }
+
         return item.type === selectedType;
       })
       .map((item) => ({
         ...item,
+
         location: currentLocation,
+
         coordinates:
-          lat !== undefined && lng !== undefined
-            ? { lat, lng }
+          safeLat !== null && safeLng !== null
+            ? {
+                lat: safeLat,
+                lng: safeLng,
+              }
             : item.coordinates,
       }));
   }, [selectedType, locationLabel, lat, lng]);
@@ -357,7 +391,7 @@ export default function EvidencePanel({
                     </span>
 
                     <span className="text-[7px] font-mono text-white/25">
-                      CONF. {item.confidence}%
+                      CONF. {formatConfidence(item.confidence)}
                     </span>
                   </div>
                 </div>
@@ -415,7 +449,9 @@ export default function EvidencePanel({
 
             <EvidenceDetail
               label="CONFIDENCE"
-              value={`${selectedEvidence.confidence}%`}
+              value={formatConfidence(
+                selectedEvidence.confidence
+              )}
             />
           </div>
 
@@ -432,10 +468,14 @@ export default function EvidencePanel({
             {selectedEvidence.coordinates && (
               <div className="mt-1 font-mono text-[7px] text-white/25">
                 LAT{' '}
-                {selectedEvidence.coordinates.lat.toFixed(4)}
+                {formatCoordinate(
+                  selectedEvidence.coordinates.lat
+                )}
                 {'  '}
                 LNG{' '}
-                {selectedEvidence.coordinates.lng.toFixed(4)}
+                {formatCoordinate(
+                  selectedEvidence.coordinates.lng
+                )}
               </div>
             )}
           </div>

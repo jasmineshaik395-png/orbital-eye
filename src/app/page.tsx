@@ -342,12 +342,6 @@ export default function Dashboard() {
   const [liveFeedName, setLiveFeedName] = useState('');
   const [liveFeedEmbedAllowed, setLiveFeedEmbedAllowed] = useState(true);
 
-  // Splash screen
-  useEffect(() => {
-    const splashTimer = setTimeout(() => setShowSplash(false), 2500);
-    return () => clearTimeout(splashTimer);
-  }, []);
-
   // On mount: geolocate by IP and fly to user's city (after splash/map init)
   useEffect(() => {
     if (typeof window === 'undefined') return;

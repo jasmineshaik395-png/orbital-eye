@@ -43,11 +43,16 @@ export async function fetchLiveAircraft(): Promise<LiveAircraftResult> {
     for (const ac of list) if (!merged.has(ac.id)) merged.set(ac.id, ac);
   };
 
-  const [openSkyResult, adsbMilResult, regionalResult] = await Promise.allSettled([
+  // OpenSky (a separate host, no shared rate limit with adsb.fi) runs
+  // concurrently with adsb.fi. Within adsb.fi itself, the military feed is
+  // awaited before the regional sweep starts — firing both at the same
+  // instant put every adsb.fi request, /mil included, in one burst and
+  // tripped its rate limiter (429s across the board).
+  const [openSkyResult, adsbMilResult] = await Promise.allSettled([
     openSkyProvider.fetchLiveAircraft(),
     adsbFiProvider.fetchLiveAircraft(),
-    fetchAdsbFiRegionalSweep(),
   ]);
+  const regionalResult = await Promise.allSettled([fetchAdsbFiRegionalSweep()]);
 
   const osOk = openSkyResult.status === 'fulfilled' && openSkyResult.value.ok;
   const osAircraft = openSkyResult.status === 'fulfilled' ? openSkyResult.value.aircraft : [];
@@ -55,7 +60,7 @@ export async function fetchLiveAircraft(): Promise<LiveAircraftResult> {
     ? openSkyResult.value.ageSeconds : null;
 
   const milAircraft = adsbMilResult.status === 'fulfilled' ? adsbMilResult.value.aircraft : [];
-  const regional = regionalResult.status === 'fulfilled' ? regionalResult.value : [];
+  const regional = regionalResult[0].status === 'fulfilled' ? regionalResult[0].value : [];
 
   addAll(osAircraft);
   addAll(milAircraft);

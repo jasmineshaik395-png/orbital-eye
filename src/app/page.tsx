@@ -977,6 +977,28 @@ export default function Dashboard() {
   return (
     <main className="fixed inset-0 w-full h-full bg-[var(--bg-void)] overflow-hidden">
 
+      {/* ── PERMANENT ANIMATED SPACE BACKGROUND ──
+          Plays behind the globe and all website UI. It is independent
+          of showIntro, so it continues looping after the intro ends. */}
+      <div className="fixed inset-0 z-0 overflow-hidden pointer-events-none">
+        <video
+          autoPlay
+          muted
+          loop
+          playsInline
+          preload="auto"
+          className="absolute inset-0 w-full h-full object-cover"
+          aria-hidden="true"
+        >
+          <source src="/space-background.mp4" type="video/mp4" />
+        </video>
+        <div className="absolute inset-0 bg-black/35" />
+      </div>
+
+      {/* ── WEBSITE / GLOBE + UI ──
+          Everything below stays above the animated background. */}
+      <div className="absolute inset-0 z-10">
+
       {/* ── VIDEO INTRO ── */}
       <AnimatePresence>
         {showIntro && (
@@ -990,6 +1012,7 @@ export default function Dashboard() {
               autoPlay
               muted
               playsInline
+              preload="auto"
               className="w-full h-full object-cover"
               onEnded={() => {
                 setShowIntro(false);
@@ -1004,7 +1027,8 @@ export default function Dashboard() {
             </video>
             <button
               type="button"
-              onClick={() => {
+              onClick={(e) => {
+                e.stopPropagation();
                 setShowIntro(false);
                 setMapProjection('globe');
               }}
@@ -1780,7 +1804,7 @@ export default function Dashboard() {
         Press <span className="text-[var(--gold-primary)] opacity-80">?</span> for shortcuts · <span className="text-[var(--gold-primary)] opacity-80">F</span> fullscreen · <span className="text-[var(--gold-primary)] opacity-80">R</span> reset view
       </div>
 
-
+      </div>
     </main>
   );
 }

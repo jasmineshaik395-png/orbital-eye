@@ -731,6 +731,30 @@ function OsirisMap({ data, activeLayers, onEntityClick, onMouseCoords, onRightCl
         }, paint: { 'icon-opacity': 0.95 }});
       });
 
+      // Reliable text fallback for globe mode. If a custom plane icon is not
+      // available in a browser/WebGL context, the aircraft still appears as
+      // a visible airplane symbol and remains clickable for flight details.
+      const flightFallbacks = [
+        { id: 'fl-commercial-fallback', src: 'flights', color: '#00E5FF' },
+        { id: 'fl-private-fallback', src: 'private-fl', color: '#00C853' },
+        { id: 'fl-jets-fallback', src: 'jets', color: '#FF4DFF' },
+        { id: 'fl-military-fallback', src: 'military', color: '#FF5252' },
+      ];
+      flightFallbacks.forEach(l => {
+        map.addLayer({ id: l.id, type: 'symbol', source: l.src, layout: {
+          'text-field': '✈',
+          'text-size': ['interpolate', ['linear'], ['zoom'], 1, 10, 3, 13, 5, 16, 8, 20],
+          'text-rotate': ['get', 'heading'],
+          'text-rotation-alignment': 'map',
+          'text-allow-overlap': true,
+          'text-ignore-placement': true,
+        }, paint: {
+          'text-color': l.color,
+          'text-halo-color': '#05070D',
+          'text-halo-width': 1.2,
+        }});
+      });
+
       // Route layers are added later (after setMapReady) so they render on top of everything.
 
       // Balloons (moving entities)
@@ -874,7 +898,7 @@ function OsirisMap({ data, activeLayers, onEntityClick, onMouseCoords, onRightCl
     };
 
     // ── Flights (with FlightAware + ADS-B Exchange links + ROUTE VISUALIZATION) ──
-    ['fl-commercial','fl-private','fl-jets','fl-military'].forEach(layer => {
+    ['fl-commercial','fl-private','fl-jets','fl-military','fl-commercial-fallback','fl-private-fallback','fl-jets-fallback','fl-military-fallback'].forEach(layer => {
       map.on('click', layer, e => {
         if (!e.features?.length) return;
         const p = e.features[0].properties as any;
@@ -1024,7 +1048,7 @@ function OsirisMap({ data, activeLayers, onEntityClick, onMouseCoords, onRightCl
       'gdelt-dots','weather-dots','infra-dots','maritime-dots','choke-dots','news-dots',
       'balloon-dots','rad-dots','ship-dots','sweep-device-dots','scan-targets-dots',
       'sdk-sea','sdk-air','sdk-intel','malware-dots','cyber-heads','gdelt-events-dots',
-      'cf-outage-dots','cf-attack-dots','flight-dots','military-dots','jet-dots','private-dots']);
+      'cf-outage-dots','cf-attack-dots','flight-dots','military-dots','jet-dots','private-dots','fl-commercial-fallback','fl-private-fallback','fl-jets-fallback','fl-military-fallback']);
 
     // Satellites are picked on the GPU: the pick pass runs the same vertex
     // shader as the visible one, so the target is always exactly where the
@@ -2211,10 +2235,10 @@ function OsirisMap({ data, activeLayers, onEntityClick, onMouseCoords, onRightCl
     setVis(['network-mesh-atmo', 'network-mesh-glow', 'network-mesh-core'], activeLayers.internet_outages || activeLayers.malware);
     setVis(['cyber-arcs-atmo','cyber-arcs-glow','cyber-arcs-core','cyber-arcs-flow','cyber-heads','cyber-impacts','cyber-labels'], (activeLayers as any).cyber_attacks);
     setVis(['day-night-fill'], activeLayers.day_night);
-    setVis(['fl-commercial'], activeLayers.flights);
-    setVis(['fl-private'], activeLayers.private);
-    setVis(['fl-jets'], activeLayers.jets);
-    setVis(['fl-military'], activeLayers.military);
+    setVis(['fl-commercial','fl-commercial-fallback'], activeLayers.flights);
+    setVis(['fl-private','fl-private-fallback'], activeLayers.private);
+    setVis(['fl-jets','fl-jets-fallback'], activeLayers.jets);
+    setVis(['fl-military','fl-military-fallback'], activeLayers.military);
     setVis(['cctv-glow','cctv-dots','cctv-label'], activeLayers.cctv);
     setVis(['fires-heat'], activeLayers.fires);
     setVis(['weather-glow','weather-dots','weather-label'], activeLayers.weather);

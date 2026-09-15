@@ -26,6 +26,7 @@ import GlobalStatusBar from '@/components/GlobalStatusBar';
 import LiveAlerts from '@/components/LiveAlerts';
 import WorldRemote from '@/components/WorldRemote';
 import ArcGISPanel from '@/components/ArcGISPanel';
+import BenchmarkPanel from '@/components/BenchmarkPanel';
 const OsirisMap = dynamic(() => import('@/components/OsirisMap'), { ssr: false });
 const LayerPanel = dynamic(() => import('@/components/LayerPanel'));
 const SpaceCam = dynamic(() => import('@/components/SpaceCam'), { ssr: false });
@@ -176,6 +177,7 @@ export default function Dashboard() {
   const [showLayers, setShowLayers] = useState(true);
   const [showMarkets, setShowMarkets] = useState(false);
   const [showAlerts, setShowAlerts] = useState(false);
+  const [showBenchmark, setShowBenchmark] = useState(false);
   const [showSpaceCam, setShowSpaceCam] = useState(false);
   const [showScmPanel, setShowScmPanel] = useState(true);
   const [showIntel, setShowIntel] = useState(false);
@@ -1567,6 +1569,34 @@ export default function Dashboard() {
         </div>
 
         <div className="relative group">
+          <button
+            onClick={() => {
+              setShowBenchmark(!showBenchmark);
+              setShowIntel(false);
+              setShowMarkets(false);
+              setShowAlerts(false);
+              setShowSpaceCam(false);
+              setShowDrawing(false);
+              setShowDirections(false);
+              setShowDesktopSearch(false);
+            }}
+            className={`relative w-8 h-8 rounded-full flex items-center justify-center transition-colors focus:outline-none focus-visible:ring-1 focus-visible:ring-white/50 ${showBenchmark ? 'bg-[var(--cyan-primary)]/20' : 'hover:bg-white/10'}`}
+            title="Benchmark — system results and performance"
+            aria-label="Benchmark"
+            aria-expanded={showBenchmark}
+          >
+            <Activity className={`w-4 h-4 ${showBenchmark ? 'text-[var(--cyan-primary)]' : 'text-white/60'}`} />
+            {showBenchmark && (
+              <span
+                aria-hidden="true"
+                className="absolute -right-1 top-1/2 -translate-y-1/2 h-4 w-[2px] rounded-full bg-current text-[var(--cyan-primary)]"
+              />
+            )}
+          </button>
+          <span className="absolute right-11 top-1/2 -translate-y-1/2 px-2 py-1 text-[9px] font-mono tracking-wider text-white/80 bg-black/80 backdrop-blur-sm rounded whitespace-nowrap opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 transition-opacity pointer-events-none">BENCHMARK</span>
+        </div>
+
+        <div className="relative group">
           <button onClick={() => { setShowDrawing(!showDrawing); setShowIntel(false); setShowMarkets(false); setShowAlerts(false); setShowSpaceCam(false); }} className={`relative w-8 h-8 rounded-full flex items-center justify-center transition-colors focus:outline-none focus-visible:ring-1 focus-visible:ring-white/50 ${showDrawing ? 'bg-[#00E5FF]/20' : 'hover:bg-white/10'}`} title="Draw — measure areas of interest on the map" aria-label="Draw" aria-expanded={showDrawing}>
             <PenLine className={`w-4 h-4 ${showDrawing ? 'text-[#00E5FF]' : 'text-white/60'}`} />
             {showDrawing && (
@@ -2045,6 +2075,13 @@ export default function Dashboard() {
           )}
         </AnimatePresence>
       </div>
+
+      {/* ── RESULTS / BENCHMARK ── */}
+      <AnimatePresence>
+        {showBenchmark && (
+          <BenchmarkPanel onClose={() => setShowBenchmark(false)} />
+        )}
+      </AnimatePresence>
 
       {/* Keyboard Shortcuts Overlay */}
       <KeyboardShortcuts />

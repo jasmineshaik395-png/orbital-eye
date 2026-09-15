@@ -1,7 +1,7 @@
 'use client';
 
 import { buildGeometry, closeRing, drawReducer, initialDrawState, measure, type DrawAction, type DrawMode, type DrawProgress, type DrawResult, type DrawState } from '@/lib/draw';
-import { useEffect, useRef, useState, useCallback, useMemo, memo } from 'react';
+import { useEffect, useRef, useState, useCallback, memo } from 'react';
 import * as maplibregl from 'maplibre-gl';
 import { installTerrainTileProtocol } from '@/lib/terrain-tiles';
 import { createSatelliteLayer, parseColor, type SatPoint } from '@/lib/satellite-layer';
@@ -81,6 +81,9 @@ interface OsirisMapProps {
   navigating?: boolean;
   /** Corroborated endpoint airports for watched aircraft, keyed by icao24. */
   aircraftAirports?: Record<string, Array<{ icao: string; iata?: string; city?: string; lat: number; lng: number }>>;
+  /** Group currently isolated — every other group's layers render dimmed.
+   *  null/undefined = every group at full strength. */
+  focusedGroup?: string | null;
 }
 
 function computeSolarTerminator(): [number, number][] {
@@ -105,7 +108,62 @@ function computeSolarTerminator(): [number, number][] {
 
 const EMPTY_FC = { type: 'FeatureCollection' as const, features: [] };
 
-function OsirisMap({ data, activeLayers, onEntityClick, onMouseCoords, onRightClick, onViewStateChange, flyToLocation, projection = 'globe', terrainEnabled = false, terrainRetry = 0, terrainFocus = 0, onTerrainStatusChange, mapStyle = 'dark', sweepData, scanTargets = [], demoMode = false, theme = 'core', drawnPolygons = [], arcgisLayers = [], drawMode = null, onDrawComplete, onDrawProgress, onDrawCancel, drawCommand = null, onMapCenter, route = null, userLocation = null, followUser = false, onFollowInterrupt, navigating = false, aircraftAirports = {} }: OsirisMapProps) {
+/** LayerPanel group label → the MapLibre layer ids it draws with. Kept in
+ *  sync with LAYER_GROUPS in LayerPanel.tsx — used to dim every group except
+ *  the one the operator has focused. The live 3D satellite layer isn't a
+ *  standard MapLibre paint-driven layer, so SPACE is handled separately
+ *  (see the focus effect below). */
+const GROUP_LAYER_IDS: Record<string, string[]> = {
+  SDK: ['sdk-sea', 'sdk-sea-glow', 'sdk-sea-atmo'],
+  AVIATION: [
+    'fl-commercial', 'fl-commercial-fallback',
+    'fl-private', 'fl-private-fallback',
+    'fl-jets', 'fl-jets-fallback',
+    'fl-military', 'fl-military-fallback',
+  ],
+  MARITIME: [
+    'maritime-glow', 'maritime-dots', 'maritime-label',
+    'choke-glow', 'choke-dots', 'choke-label',
+    'ship-dots', 'ship-label',
+  ],
+  SPACE: ['sat-glow', 'sat-dots'],
+  SURVEIL: [
+    'cctv-glow', 'cctv-dots', 'cctv-label',
+    'news-glow', 'news-dots', 'news-label',
+  ],
+  HAZARD: [
+    'eq-circles', 'eq-label',
+    'fires-heat',
+    'weather-glow', 'weather-dots', 'weather-label',
+  ],
+  THREAT: [
+    'infra-glow', 'infra-dots', 'infra-label',
+    'gdelt-dots', 'gdelt-events-dots',
+  ],
+  NETWORK: [
+    'malware-glow', 'malware-dots', 'malware-label', 'malware-new-ring',
+    'cyber-arcs-atmo', 'cyber-arcs-glow', 'cyber-arcs-core', 'cyber-arcs-flow',
+    'cyber-heads', 'cyber-impacts', 'cyber-labels',
+  ],
+  NETINTEL: [
+    'cf-outage-halo', 'cf-outage-dots', 'cf-outage-label',
+    'cf-attack-dots', 'cf-attack-label',
+  ],
+  DISPLAY: ['day-night-fill'],
+};
+
+const ALL_FOCUSABLE_IDS = Object.values(GROUP_LAYER_IDS).flat();
+
+/** Which paint property carries opacity, keyed by MapLibre layer type. */
+const OPACITY_PAINT_PROPS: Record<string, string[]> = {
+  circle: ['circle-opacity'],
+  line: ['line-opacity'],
+  fill: ['fill-opacity'],
+  symbol: ['icon-opacity', 'text-opacity'],
+  heatmap: ['heatmap-opacity'],
+};
+
+function OsirisMap({ data, activeLayers, onEntityClick, onMouseCoords, onRightClick, onViewStateChange, flyToLocation, projection = 'globe', terrainEnabled = false, terrainRetry = 0, terrainFocus = 0, onTerrainStatusChange, mapStyle = 'dark', sweepData, scanTargets = [], demoMode = false, theme = 'core', drawnPolygons = [], arcgisLayers = [], drawMode = null, onDrawComplete, onDrawProgress, onDrawCancel, drawCommand = null, onMapCenter, route = null, userLocation = null, followUser = false, onFollowInterrupt, navigating = false, aircraftAirports = {}, focusedGroup = null }: OsirisMapProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const mapRef = useRef<maplibregl.Map | null>(null);
   const popupRef = useRef<maplibregl.Popup | null>(null);
@@ -598,10 +656,10 @@ function OsirisMap({ data, activeLayers, onEntityClick, onMouseCoords, onRightCl
       // what made the map read as half 2D and half 3D.
       // Hit-testing is handled by the 3D layer's own GPU pick pass, since
       // queryRenderedFeatures cannot see into a custom WebGL layer.
-      map.addLayer({ id: 'sat-glow', type: 'circle', source: 'satellites', layout: { visibility: 'none' }, paint: {
+      map.addLayer({ id: 'sat-glow', type: 'circle', source: 'satellites', layout: { visibility: 'visible' }, paint: {
         'circle-radius': ['interpolate',['linear'],['zoom'], 1,3, 5,6], 'circle-color': ['get','color'], 'circle-opacity': 0.3, 'circle-blur': 1,
       }});
-      map.addLayer({ id: 'sat-dots', type: 'circle', source: 'satellites', layout: { visibility: 'none' }, paint: {
+      map.addLayer({ id: 'sat-dots', type: 'circle', source: 'satellites', layout: { visibility: 'visible' }, paint: {
         'circle-radius': ['interpolate',['linear'],['zoom'], 1,1.5, 5,3], 'circle-color': ['get','color'], 'circle-opacity': 1.0,
       }});
       // The spacecraft themselves, lifted to their orbit.
@@ -1647,18 +1705,30 @@ function OsirisMap({ data, activeLayers, onEntityClick, onMouseCoords, onRightCl
     ids.forEach(id => { if (map.getLayer(id)) map.setLayoutProperty(id, 'visibility', visible ? 'visible' : 'none'); });
   }, []);
 
-  // Existing flight layer IDs are the focus signal. When exactly one is
-  // selected, all four flight categories remain rendered and the selected
-  // category stays bright while the others are dimmed.
-  const flightFocus = useMemo(() => {
-    const selected = [
-      activeLayers.flights ? 'flights' : null,
-      activeLayers.private ? 'private' : null,
-      activeLayers.jets ? 'jets' : null,
-      activeLayers.military ? 'military' : null,
-    ].filter(Boolean) as string[];
-    return selected.length === 1 ? selected[0] : null;
-  }, [activeLayers.flights, activeLayers.private, activeLayers.jets, activeLayers.military]);
+  /** Original opacity for each layer + paint-prop pair, captured the first
+   *  time it's dimmed so "show all" restores the real value instead of
+   *  snapping everything to a flat 1. */
+  const baseOpacityRef = useRef<Record<string, any>>({});
+
+  const setOpacityFactor = useCallback((ids: string[], factor: number) => {
+    const map = mapRef.current;
+    if (!map) return;
+    ids.forEach(id => {
+      const layer = map.getLayer(id);
+      if (!layer) return;
+      const props = OPACITY_PAINT_PROPS[layer.type as string] || [];
+      props.forEach(prop => {
+        const cacheKey = `${id}:${prop}`;
+        if (!(cacheKey in baseOpacityRef.current)) {
+          const current = map.getPaintProperty(id, prop as any);
+          baseOpacityRef.current[cacheKey] = current !== undefined ? current : 1;
+        }
+        const base = baseOpacityRef.current[cacheKey];
+        const value = typeof base === 'number' ? base * factor : (['*', base, factor] as any);
+        map.setPaintProperty(id, prop as any, value);
+      });
+    });
+  }, []);
 
   // Flight data → GeoJSON (GPU rendered)
   useEffect(() => {
@@ -1711,12 +1781,11 @@ function OsirisMap({ data, activeLayers, onEntityClick, onMouseCoords, onRightCl
 
     // Do not decimate commercial flights: the API response is already a
     // bounded live dataset and every valid aircraft should be visible.
-    // Focus changes opacity; it never empties another category's source.
-    setGeo('flights', toFeatures(data?.commercial_flights));
-    setGeo('private-fl', toFeatures(data?.private_flights));
-    setGeo('jets', toFeatures(data?.private_jets));
-    setGeo('military', toFeatures(data?.military_flights));
-  }, [mapReady, data?.commercial_flights, data?.private_flights, data?.private_jets, data?.military_flights, data?.source, setGeo]);
+    setGeo('flights', activeLayers.flights ? toFeatures(data?.commercial_flights) : []);
+    setGeo('private-fl', activeLayers.private ? toFeatures(data?.private_flights) : []);
+    setGeo('jets', activeLayers.jets ? toFeatures(data?.private_jets) : []);
+    setGeo('military', activeLayers.military ? toFeatures(data?.military_flights) : []);
+  }, [mapReady, data?.commercial_flights, data?.private_flights, data?.private_jets, data?.military_flights, data?.source, activeLayers.flights, activeLayers.private, activeLayers.jets, activeLayers.military]);
 
   /**
    * Pull the palette out of the document whenever it can have changed.
@@ -1794,32 +1863,6 @@ function OsirisMap({ data, activeLayers, onEntityClick, onMouseCoords, onRightCl
   }, [mapReady, data.earthquakes, activeLayers.earthquakes, setGeo]);
 
   /** Catalogue rows -> the packed form the 3D layer draws. */
-  /**
-   * Existing LayerPanel satellite IDs are used as the focus signal. A focus is
-   * active only when exactly one satellite sub-category is selected; this keeps
-   * the normal multi-toggle behaviour unchanged and avoids inventing category IDs.
-   */
-  const satelliteFocusCategory = useMemo(() => {
-    const al = activeLayers as any;
-    if (al.satellites) return null; // "All Satellites" means no focus.
-    const selected = [
-      al.sat_comms ? 'comms' : null,
-      al.sat_military ? 'military' : null,
-      al.sat_navigation ? 'navigation' : null,
-      al.sat_earth ? 'earth_obs' : null,
-      al.sat_science ? 'science' : null,
-    ].filter(Boolean) as string[];
-    return selected.length === 1 ? selected[0] : null;
-  }, [
-    (activeLayers as any).satellites,
-    (activeLayers as any).sat_comms,
-    (activeLayers as any).sat_military,
-    (activeLayers as any).sat_navigation,
-    (activeLayers as any).sat_earth,
-    (activeLayers as any).sat_science,
-  ]);
-
-  /** Catalogue rows -> the packed form the 3D layer draws. */
   const toSatPoints = useCallback((rows: SatelliteRow[]): SatPoint[] => rows.map((s) => ({
     lng: s.lng,
     lat: s.lat,
@@ -1828,12 +1871,7 @@ function OsirisMap({ data, activeLayers, onEntityClick, onMouseCoords, onRightCl
     // Stations are the ones an operator is usually looking for, so they get
     // to be findable in a field of several hundred identical dots.
     size: s.category === 'science' || /ISS|TIANGONG/i.test(s.name || '') ? 2.2 : 1,
-    // Never remove a satellite to achieve focus: non-focused categories stay
-    // in the same GPU buffer and are rendered dimmed instead.
-    opacity: satelliteFocusCategory
-      ? (s.category === satelliteFocusCategory ? 1 : 0.18)
-      : 1,
-  })), [palette, satelliteFocusCategory]);
+  })), [palette]);
 
   /**
    * Re-points the selection at the same satellite after a refresh.
@@ -1862,56 +1900,38 @@ function OsirisMap({ data, activeLayers, onEntityClick, onMouseCoords, onRightCl
     const al = activeLayers as any;
     const at = Date.parse(data.satellites_at ?? '');
     satEpochRef.current = Number.isFinite(at) ? at : null;
-
-    // A satellite sub-category is a focus, not a visibility filter. Keep every
-    // satellite in the source/GPU buffer and dim non-focused categories instead.
-    const anySat = !!(
-      al.satellites ||
-      al.sat_comms ||
-      al.sat_military ||
-      al.sat_navigation ||
-      al.sat_earth ||
-      al.sat_science
-    );
-
-    if (!anySat) {
+    
+    // If 'All Satellites' is on, show everything
+    if (al.satellites) {
+      setGeo('satellites', sats.map((s: any) => ({ type: 'Feature', geometry: { type: 'Point', coordinates: [s.lng, s.lat] }, properties: { name: s.name, color: satColorFor(s.category, s.color, palette), mission: s.mission, alt: s.alt, noradId: s.noradId, category: s.category } })));
+      satRowsRef.current = sats;
+      satLayerRef.current?.setPoints(toSatPoints(sats));
+      resyncSatSelection(sats);
+      return;
+    }
+    
+    // Otherwise filter by enabled sub-layers
+    const enabledCategories: string[] = [];
+    if (al.sat_comms) enabledCategories.push('comms');
+    if (al.sat_military) enabledCategories.push('military');
+    if (al.sat_navigation) enabledCategories.push('navigation');
+    if (al.sat_earth) enabledCategories.push('earth_obs');
+    if (al.sat_science) enabledCategories.push('science');
+    
+    if (enabledCategories.length === 0) {
       setGeo('satellites', []);
       satRowsRef.current = [];
       satLayerRef.current?.setPoints([]);
       clearSat();
       return;
     }
-
-    setGeo('satellites', sats.map((s: any) => ({
-      type: 'Feature',
-      geometry: { type: 'Point', coordinates: [s.lng, s.lat] },
-      properties: {
-        name: s.name,
-        color: satColorFor(s.category, s.color, palette),
-        mission: s.mission,
-        alt: s.alt,
-        noradId: s.noradId,
-        category: s.category,
-      },
-    })));
-    satRowsRef.current = sats;
-    satLayerRef.current?.setPoints(toSatPoints(sats));
-    resyncSatSelection(sats);
-  }, [
-    mapReady,
-    data.satellites,
-    activeLayers.satellites,
-    (activeLayers as any).sat_comms,
-    (activeLayers as any).sat_military,
-    (activeLayers as any).sat_navigation,
-    (activeLayers as any).sat_earth,
-    (activeLayers as any).sat_science,
-    data.satellites_at,
-    setGeo,
-    toSatPoints,
-    resyncSatSelection,
-    clearSat,
-  ]);
+    
+    const filtered = sats.filter((s: any) => enabledCategories.includes(s.category));
+    setGeo('satellites', filtered.map((s: any) => ({ type: 'Feature', geometry: { type: 'Point', coordinates: [s.lng, s.lat] }, properties: { name: s.name, color: satColorFor(s.category, s.color, palette), mission: s.mission, alt: s.alt, noradId: s.noradId, category: s.category } })));
+    satRowsRef.current = filtered;
+    satLayerRef.current?.setPoints(toSatPoints(filtered));
+    resyncSatSelection(filtered);
+  }, [mapReady, data.satellites, activeLayers.satellites, (activeLayers as any).sat_comms, (activeLayers as any).sat_military, (activeLayers as any).sat_navigation, (activeLayers as any).sat_earth, (activeLayers as any).sat_science, data.satellites_at, setGeo, toSatPoints, resyncSatSelection, clearSat]);
 
   useEffect(() => {
     if (!mapReady) return;
@@ -2286,7 +2306,7 @@ function OsirisMap({ data, activeLayers, onEntityClick, onMouseCoords, onRightCl
     // The circle layers stay hidden whatever the toggles say — the 3D layer
     // is the single representation, and showing both drew every satellite
     // twice, once flat on the ground and once at altitude.
-    setVis(['sat-glow','sat-dots'], false);
+    setVis(['sat-glow','sat-dots'], anySat);
     // Clearing the 3D layer is what actually turns satellites off.
     if (!anySat) { satRowsRef.current = []; satLayerRef.current?.setPoints([]); }
     setVis(['gdelt-dots'], activeLayers.global_incidents);
@@ -2298,12 +2318,10 @@ function OsirisMap({ data, activeLayers, onEntityClick, onMouseCoords, onRightCl
     setVis(['network-mesh-atmo', 'network-mesh-glow', 'network-mesh-core'], activeLayers.internet_outages || activeLayers.malware);
     setVis(['cyber-arcs-atmo','cyber-arcs-glow','cyber-arcs-core','cyber-arcs-flow','cyber-heads','cyber-impacts','cyber-labels'], (activeLayers as any).cyber_attacks);
     setVis(['day-night-fill'], activeLayers.day_night);
-    // Flight category buttons now select/focus rather than hide. Keep every
-    // category visible whenever its source has data; opacity is handled below.
-    setVis(['fl-commercial','fl-commercial-fallback'], true);
-    setVis(['fl-private','fl-private-fallback'], true);
-    setVis(['fl-jets','fl-jets-fallback'], true);
-    setVis(['fl-military','fl-military-fallback'], true);
+    setVis(['fl-commercial','fl-commercial-fallback'], activeLayers.flights);
+    setVis(['fl-private','fl-private-fallback'], activeLayers.private);
+    setVis(['fl-jets','fl-jets-fallback'], activeLayers.jets);
+    setVis(['fl-military','fl-military-fallback'], activeLayers.military);
     setVis(['cctv-glow','cctv-dots','cctv-label'], activeLayers.cctv);
     setVis(['fires-heat'], activeLayers.fires);
     setVis(['weather-glow','weather-dots','weather-label'], activeLayers.weather);
@@ -2322,6 +2340,23 @@ function OsirisMap({ data, activeLayers, onEntityClick, onMouseCoords, onRightCl
     // Sweep layers always visible when data is present (controlled by useEffect)
     setVis(['sweep-connections','sweep-pulse-ring','sweep-device-glow','sweep-device-dots','sweep-device-labels'], true);
   }, [mapReady, activeLayers, setVis]);
+
+  // Focus / dim — isolates one LayerPanel group visually without touching
+  // the on/off state the toggles above control. null = every group at full
+  // strength (the default). Satellites (SPACE) render through the custom
+  // WebGL layer in satLayerRef, not standard paint properties, so they are
+  // not dimmed here — they stay at full brightness regardless of focus.
+  useEffect(() => {
+    if (!mapReady) return;
+    if (!focusedGroup) {
+      setOpacityFactor(ALL_FOCUSABLE_IDS, 1);
+      return;
+    }
+    const focusedIds = GROUP_LAYER_IDS[focusedGroup] || [];
+    const dimmedIds = ALL_FOCUSABLE_IDS.filter(id => !focusedIds.includes(id));
+    setOpacityFactor(focusedIds, 1);
+    setOpacityFactor(dimmedIds, 0.12);
+  }, [mapReady, focusedGroup, setOpacityFactor]);
 
   // IP Sweep visualization
   useEffect(() => {
@@ -2719,41 +2754,6 @@ function OsirisMap({ data, activeLayers, onEntityClick, onMouseCoords, onRightCl
       });
     }
   }, [mapReady, route]);
-
-  /**
-   * Apply category focus without touching source data or layer visibility.
-   * 1.0 = normal/selected, 0.18 = dimmed. With no single focus, everything
-   * returns to its normal opacity.
-   */
-  useEffect(() => {
-    if (!mapReady || !mapRef.current) return;
-
-    const map = mapRef.current;
-    const dim = 0.18;
-
-    const flightGroups: Array<[string, string[], string]> = [
-      ['flights', ['fl-commercial'], 'icon'],
-      ['private', ['fl-private'], 'icon'],
-      ['jets', ['fl-jets'], 'icon'],
-      ['military', ['fl-military'], 'icon'],
-    ];
-
-    for (const [key, layers, kind] of flightGroups) {
-      const opacity = flightFocus && flightFocus !== key ? dim : 1;
-      layers.forEach(id => {
-        if (map.getLayer(id)) map.setPaintProperty(id, 'icon-opacity', opacity);
-      });
-      const fallbackId = `fl-${key}-fallback`;
-      if (map.getLayer(fallbackId)) {
-        map.setPaintProperty(fallbackId, 'text-opacity', opacity);
-      }
-    }
-
-    // Satellite opacity is carried per instance by the custom WebGL layer.
-    // Re-pointing the layer with the same rows updates brightness without
-    // removing or reordering any satellite.
-    satLayerRef.current?.setPoints(toSatPoints(satRowsRef.current));
-  }, [mapReady, flightFocus, satelliteFocusCategory, toSatPoints]);
 
   // ── ROUTE FRAMING ──
   // Kept apart from drawing so picking a step or an alternative redraws without
